@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <assemblyIdentity version="1.0.0.0" name="YgoMasterSettings.app" />
+
+  <!-- Habilita Common Controls v6 (visuals nativos do Windows pros
+       botões, combobox, etc — sem isso fica com cara de Win95) e
+       declara o app como DPI-aware per-monitor v2. Sem isso o WinForms
+       .NET 4.8 default escala bitmap (fica borrado e parece menor que
+       janelas DPI-aware do mesmo processo). -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+          type="win32"
+          name="Microsoft.Windows.Common-Controls"
+          version="6.0.0.0"
+          processorArchitecture="*"
+          publicKeyToken="6595b64144ccf1df"
+          language="*" />
+    </dependentAssembly>
+  </dependency>
+
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2,PerMonitor</dpiAwareness>
+      <dpiAware    xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">True/PM</dpiAware>
+    </windowsSettings>
+  </application>
+</assembly>

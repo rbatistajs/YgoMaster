@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="12.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">x64</Platform>
+    <ProjectGuid>{E1C5C0A1-6F4B-4E1B-9C7D-1A2B3C4D5E6F}</ProjectGuid>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>YgoMasterSettings</RootNamespace>
+    <AssemblyName>YgoMasterSettings</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <!-- Embed app.manifest pra DPI awareness + Common Controls v6 -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>..\YgoMaster\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <ErrorReport>prompt</ErrorReport>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <OutputPath>..\YgoMaster\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <ErrorReport>prompt</ErrorReport>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <!-- App entry + UI shell -->
+    <Compile Include="Program.cs" />
+    <Compile Include="MainWindow.cs" />
+    <Compile Include="Theme.cs" />
+    <!-- Tabs (port em fases) -->
+    <Compile Include="Tabs\CardListTab.cs" />
+    <Compile Include="Tabs\ShopTab.cs" />
+    <Compile Include="Tabs\Shop\ShopPacksSubTab.cs" />
+    <Compile Include="Tabs\Shop\ShopStructuresSubTab.cs" />
+    <Compile Include="Tabs\Shop\ShopAccessoriesSubTab.cs" />
+    <Compile Include="Tabs\Shop\ShopGlobalsSubTab.cs" />
+    <Compile Include="Tabs\Shop\ShopOddsSubTab.cs" />
+    <Compile Include="Tabs\Shop\ShopVisualsSubTab.cs" />
+    <!-- Dialogs (modais que os shop sub-tabs disparam) -->
+    <Compile Include="Dialogs\CardPicker.cs" />
+    <Compile Include="Dialogs\ShopPackEditDialog.cs" />
+    <Compile Include="Dialogs\ShopStructureEditDialog.cs" />
+    <Compile Include="Dialogs\ShopAccessoryEditDialog.cs" />
+    <Compile Include="Dialogs\ShopPackOddsEditDialog.cs" />
+    <!-- Util helpers (parsing standalone de DataLE) -->
+    <Compile Include="Util\CardNameLookup.cs" />
+    <Compile Include="Util\CardTextWriter.cs" />
+    <Compile Include="Util\FormatPools.cs" />
+    <Compile Include="Util\JsonFileWriter.cs" />
+    <Compile Include="Util\ContainerInstaller.cs" />
+    <Compile Include="Util\CardSameLookup.cs" />
+    <Compile Include="Util\PropWriter.cs" />
+    <Compile Include="Util\ShopData.cs" />
+    <Compile Include="Util\ShopOddsData.cs" />
+    <Compile Include="Util\PackImageProcessor.cs" />
+  </ItemGroup>
+
+  <!-- Backend compartilhado com YgoMasterServer via <Link>. Sem dup
+       em disco — esses files vivem no server e o linker do MSBuild
+       inclui na build do settings. Mudou no server, próximo build do
+       settings já pega. -->
+  <ItemGroup>
+    <Compile Include="..\YgoMasterServer\Lib\MiniJSON.cs">
+      <Link>Shared\Lib\MiniJSON.cs</Link>
+    </Compile>
+    <Compile Include="..\YgoMasterServer\Utils.cs">
+      <Link>Shared\Utils.cs</Link>
+    </Compile>
+    <Compile Include="..\YgoMasterServer\Enums\ItemID.cs">
+      <Link>Shared\Enums\ItemID.cs</Link>
+    </Compile>
+    <Compile Include="..\YgoMasterServer\Enums\Card.cs">
+      <Link>Shared\Enums\Card.cs</Link>
+    </Compile>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+
+  <!-- Copia YgoMasterSettings.exe + .pdb pro install dir após build (mesmo
+       padrão dos outros csprojs). Idempotente; no-op se a pasta não existe. -->
+  <PropertyGroup>
+    <GoatInstallDir>D:\SteamLibrary\steamapps\common\Yu-Gi-Oh!  Master Duel\YgoMasterLE - Goat</GoatInstallDir>
+  </PropertyGroup>
+  <Target Name="CopyToGoatInstall" AfterTargets="Build"
+          Condition="Exists('$(GoatInstallDir)')">
+    <!-- Kill running instance first — else the exe is locked and the
+         copy retries 10x then fails. Silence stderr (2>nul) and ignore
+         exit code so it's a no-op when the process isn't running. -->
+    <Exec Command="taskkill /F /IM YgoMasterSettings.exe 2&gt;nul"
+          IgnoreExitCode="true" />
+    <Copy SourceFiles="$(OutputPath)YgoMasterSettings.exe"
+          DestinationFolder="$(GoatInstallDir)"
+          SkipUnchangedFiles="true" />
+    <Message Text="[Roguelike] Copied YgoMasterSettings.exe -&gt; $(GoatInstallDir)"
+             Importance="high" />
+  </Target>
+</Project>
