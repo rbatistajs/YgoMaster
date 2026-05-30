@@ -27,7 +27,7 @@ layer on top of it.
 - [Gating (act / floor / ascension)](#gating-act--floor--ascension)
 - [Overrides (LP, reward, first player)](#overrides-lp-reward-first-player)
 - [Modifiers (starting board)](#modifiers-starting-board)
-- [Actions (options / message / openpack)](#actions-options--message--openpack)
+- [Actions (options / message / openpack)](#actions-options--message--openpack) — [stat actions (`lp` / `gold`)](#lp--gold-stat-actions)
 - [Actions.json and type defaults](#actionsjson-and-type-defaults)
 - [Defaults & relationship to Settings.json](#defaults--relationship-to-settingsjson)
 - [Strict coverage — avoiding soft-locks](#strict-coverage--avoiding-soft-locks)
@@ -229,6 +229,8 @@ An encounter's `action` is a tree of action nodes the server walks after the enc
 | `options` | Branch — show a list of labeled choices; player picks one and the engine descends into that option's `next`. |
 | `message` | Show text with a single OK; advances to `next` (or completes when `next` is null/missing). |
 | `openpack` | Open one or more packs of cards with weighted draws and pity, then either keep all or pick X of N. Adds the resolved cards to the run's pool / deck, then advances to `next`. |
+| `lp` | Apply an LP delta to the run (heal/damage). No prompt — fires and advances to `next`. LP ≤ 0 is game over. See [stat actions](#lp--gold-stat-actions). |
+| `gold` | Apply a gold delta to the run (gain/cost). No prompt — fires and advances to `next`. See [stat actions](#lp--gold-stat-actions). |
 
 ```json
 "action": {
@@ -308,6 +310,64 @@ An option whose `next` is `null` or missing ends the tree.
   same cards. Re-rolling requires advancing the run.
 - **State** — cards are added to the run's pool (and to the deck in keep-all mode) when the player
   confirms. The action then advances to `next`.
+
+### `lp` / `gold` (stat actions)
+
+Apply a delta to a run-level stat. **Fire-and-forget**: the engine applies the change and advances
+to `next` without waiting for any player input (no modal, no OK). The HUD animates the change on its
+own — a colored number floats from the center of the screen to the HUD label, then the label counts
+up/down to the new value.
+
+```jsonc
+{ "type": "lp",
+  "delta": -500,            // OR
+  "delta_percent": -0.30 }  // exactly one is required
+```
+
+```jsonc
+{ "type": "gold",
+  "delta": 200,             // OR
+  "delta_percent": -0.20 }  // exactly one is required
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `delta` | XOR | Absolute int. Positive = heal/gain, negative = damage/cost. |
+| `delta_percent` | XOR | Fraction. **`lp`**: of `maxLp`. **`gold`**: of the **current** gold. Out of `[-1, 1]` → warned at load, clamped at apply. |
+| `next` | no | Chain another action when this one finishes (same shape as elsewhere). |
+
+Exactly one of `delta` / `delta_percent` must be present — both or neither is a load-time error
+(the encounter is dropped with a console warning).
+
+**Clamping & game over:**
+- `lp` clamps to `[0, maxLp]`. If LP reaches **0**, the run ends (game over — same path as a combat
+  loss). Use this for risky events (`{ "type": "lp", "delta_percent": -0.80 }`).
+- `gold` clamps at **0** (no negative gold) with no upper cap. A cost larger than the current gold
+  just zeroes it; it never blocks the action or ends the run.
+
+**Chaining example** — a message prologue, an effect, then an epilogue:
+
+```json
+"action": {
+  "type": "message", "title": "O Altar", "message": "Você sangra na pedra.",
+  "next": { "type": "lp", "delta": -500,
+    "next": { "type": "message", "title": "Recompensa", "message": "Algo brilha no chão.",
+      "next": { "type": "gold", "delta": 300 }
+    }
+  }
+}
+```
+
+**Standalone** — no message wrapper, useful for passive triggers (e.g. a future "lose N LP per node
+moved"):
+
+```json
+"action": { "type": "lp", "delta": -5 }
+```
+
+When multiple stat actions fire in one chain without a prompt in between (e.g. `lp → gold → lp`),
+the HUD consolidates them into one animation per stat (it diffs the run state, so two `lp` steps
+show as a single combined delta).
 
 ---
 
