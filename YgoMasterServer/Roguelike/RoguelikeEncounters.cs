@@ -220,8 +220,11 @@ namespace YgoMaster
                 {
                     int packs = Utils.GetValue<int>(node, "packs", 1);
                     if (packs < 1) throw new Exception("openpack: packs must be >= 1");
-                    int pick = Utils.GetValue<int>(node, "pick", 0);
-                    if (pick < 0) throw new Exception("openpack: pick must be >= 0");
+                    // pick accepts int N (exact-pick) or { min, max } object (range).
+                    int pickMin, pickMax;
+                    ParsePickRange(node, out pickMin, out pickMax);
+                    if (pickMin < 0 || pickMax < 0) throw new Exception("openpack: pick min/max must be >= 0");
+                    if (pickMin > pickMax) throw new Exception("openpack: pick.min (" + pickMin + ") > pick.max (" + pickMax + ")");
 
                     List<object> pulls = Utils.GetValue<List<object>>(node, "pulls");
                     if (pulls == null || pulls.Count == 0) throw new Exception("openpack: pulls required");
@@ -240,7 +243,10 @@ namespace YgoMaster
                         sizePerPack += count;
                     }
                     int sizeTotal = sizePerPack * packs;
-                    if (pick > sizeTotal) throw new Exception("openpack: pick (" + pick + ") > total size (" + sizeTotal + ")");
+                    // pickMin must be reachable; the engine clamps pickMax to size at stage time
+                    // (rolling fewer cards than max is fine — clamp keeps the UI consistent), but
+                    // pickMin > size would deadlock the action because OK could never enable.
+                    if (pickMin > sizeTotal) throw new Exception("openpack: pick.min (" + pickMin + ") > total size (" + sizeTotal + ")");
 
                     // pity: false | { rarityKey: {...} }
                     object pityRaw;
@@ -267,6 +273,30 @@ namespace YgoMaster
             }
         }
 
+
+        // Parse openpack's `pick` (int N or { min, max } object) into a [min, max] pair.
+        // Mirrors RoguelikeActionEngine.ParsePick — kept here so validation can reject obviously
+        // bad shapes (negatives, min > max) at load time before any draw runs.
+        static void ParsePickRange(Dictionary<string, object> node, out int min, out int max)
+        {
+            min = 0; max = 0;
+            object raw;
+            if (node == null || !node.TryGetValue("pick", out raw) || raw == null) return;
+            Dictionary<string, object> obj = raw as Dictionary<string, object>;
+            if (obj != null)
+            {
+                bool hasMin = obj.ContainsKey("min");
+                bool hasMax = obj.ContainsKey("max");
+                if (hasMin) try { min = Convert.ToInt32(obj["min"]); } catch { }
+                if (hasMax) try { max = Convert.ToInt32(obj["max"]); } catch { }
+                if (hasMin && !hasMax) max = min;
+                else if (hasMax && !hasMin) min = max;
+            }
+            else
+            {
+                try { max = Convert.ToInt32(raw); min = max; } catch { }
+            }
+        }
 
         // Validate the pool spec inside an openpack pull (type checks only; optional fields).
         static void ValidatePackPool(Dictionary<string, object> pool)

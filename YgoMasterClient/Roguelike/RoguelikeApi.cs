@@ -265,9 +265,14 @@ namespace YgoMasterClient
                 }
             }
 
-            // openpack accessors
+            // openpack accessors. Pick == pickMax (kept under the name `Pick` for retrocompat
+            // with the older "pick exact N" payload; that flow now lives as a degenerate range
+            // with PickMin == PickMax). PickMin defaults to Pick when missing from the wire so
+            // existing exact-pick actions keep behaving the same.
             public string Mode { get { return Data != null && Data.ContainsKey("mode") ? Convert.ToString(Data["mode"]) : "keep"; } }
             public int Pick    { get { return Data != null && Data.ContainsKey("pick") ? Convert.ToInt32(Data["pick"])  : 0; } }
+            public int PickMin { get { return Data != null && Data.ContainsKey("pickMin") ? Convert.ToInt32(Data["pickMin"]) : Pick; } }
+            public int PickMax { get { return Pick; } }
             public int Size    { get { return Data != null && Data.ContainsKey("size") ? Convert.ToInt32(Data["size"])  : 0; } }
             public PackLabels TextLabels
             {

@@ -74,7 +74,11 @@ namespace YgoMasterClient
         // order AND server _cards order — because OnCreatedView reorders m_DrawDatas to mirror
         // the server sort BEFORE the native VC instantiates clones from it.
         static HashSet<int> _selected;
-        static int _pickRequired;
+        // Selection bounds — server-side both ends ([min, max]) of how many cards the player
+        // can pick. When the action declared an exact `pick: N`, both are equal and the UX
+        // collapses to the original "pick exactly N" behavior.
+        static int _pickMin;
+        static int _pickMax;
         static IntPtr _okBtn;
         static List<IntPtr> _pictGos;        // GameObjects of each CardPict, in visual index order
         // Confirm label template — server passes a string with optional {0}/{1} placeholders
@@ -449,9 +453,12 @@ namespace YgoMasterClient
                 }
 
                 _selected = new HashSet<int>();
-                _pickRequired = p.Pick;
+                _pickMin = p.PickMin;
+                _pickMax = p.PickMax;
                 _okBtn = okBtn;
-                SetButtonInteractable(okBtn, false);
+                // When min == 0 the player can confirm without selecting anything, so OK starts
+                // enabled. Otherwise it stays disabled until they reach min picks.
+                SetButtonInteractable(okBtn, _pickMin <= 0);
                 UpdateOkLabel(initial: true);
 
                 IntPtr obtainedRoot = GameObject.FindGameObjectByName(go, "ObtainedCardsRoot");
@@ -473,8 +480,9 @@ namespace YgoMasterClient
             int[] picks;
             if (p.Mode == "pick")
             {
-                if (_selected == null || _selected.Count != _pickRequired) return; // gated; should not happen
-                picks = _selected.OrderBy(i => i).ToArray();
+                int count = _selected != null ? _selected.Count : 0;
+                if (count < _pickMin || count > _pickMax) return; // gated; should not happen
+                picks = _selected != null ? _selected.OrderBy(i => i).ToArray() : new int[0];
             }
             else
             {
@@ -596,16 +604,21 @@ namespace YgoMasterClient
             }
             else
             {
-                if (_selected.Count >= _pickRequired) return; // ignore clicks above limit (defensive)
+                if (_selected.Count >= _pickMax) return; // ignore clicks above the max
                 _selected.Add(idx);
                 SetSelectVisual(_pictGos[idx], true);
             }
-            SetButtonInteractable(_okBtn, _selected.Count == _pickRequired);
+            // OK enables anywhere in the [min, max] range; the click handler enforces the upper
+            // bound and selection guards the lower bound.
+            int count = _selected.Count;
+            SetButtonInteractable(_okBtn, count >= _pickMin && count <= _pickMax);
             UpdateOkLabel();
         }
 
         // Format _confirmTemplate with the live selection counter and push it to the OK button's
-        // text. Template may contain {0}=selected, {1}=required. No-op if no template.
+        // text. Placeholders: {0}=count, {1}=max, {2}=min. Existing templates that only used
+        // {0}/{1} keep working unchanged (when min==max, {1} reads the same value the old
+        // "required" used). No-op if no template.
         //
         // initial=true happens once in OnCreatedView: we route through SetBindingText (sets
         // TextId with the HackID prefix) so the BindingTextMeshProUGUI Start() that follows
@@ -615,8 +628,9 @@ namespace YgoMasterClient
         static void UpdateOkLabel(bool initial = false)
         {
             if (_okBtn == IntPtr.Zero || string.IsNullOrEmpty(_confirmTemplate)) return;
+            int count = _selected != null ? _selected.Count : 0;
             string label;
-            try { label = string.Format(_confirmTemplate, _selected != null ? _selected.Count : 0, _pickRequired); }
+            try { label = string.Format(_confirmTemplate, count, _pickMax, _pickMin); }
             catch { label = _confirmTemplate; } // template had no placeholders
             if (initial)
             {

@@ -72,14 +72,15 @@ namespace YgoMaster
             List<object> cards = Utils.GetValue<List<object>>(cur, "_cards");
             int size = Utils.GetValue<int>(cur, "_size");
             string mode = Utils.GetValue<string>(cur, "_mode");
-            int pickRequired = Utils.GetValue<int>(cur, "pick");
+            int pickMin = Utils.GetValue<int>(cur, "_pickMin");
+            int pickMax = Utils.GetValue<int>(cur, "_pickMax");
             List<object> picksRaw = data != null ? Utils.GetValue<List<object>>(data, "picks") : null;
             if (picksRaw == null) picksRaw = new List<object>();
             HashSet<int> picks = new HashSet<int>();
             foreach (object o in picksRaw) { int i; try { i = Convert.ToInt32(o); } catch { continue; } picks.Add(i); }
             foreach (int i in picks) if (i < 0 || i >= size) return false;
             if (mode == "keep" && picks.Count != size) return false;
-            if (mode == "pick" && picks.Count != pickRequired) return false;
+            if (mode == "pick" && (picks.Count < pickMin || picks.Count > pickMax)) return false;
             if (cards != null)
             {
                 Dictionary<string, object> settings = RoguelikeSettings.Load(dataDirectory);
@@ -146,9 +147,16 @@ namespace YgoMaster
             string dataDirectory, Dictionary<string, object> regulation)
         {
             int packs = Utils.GetValue<int>(node, "packs", 1);
-            int pick = Utils.GetValue<int>(node, "pick", 0);
+            // pick:
+            //   absent or 0   -> keep mode (pick everything, no selection UI)
+            //   N (int > 0)   -> exact-pick mode (min=max=N)
+            //   {min,max} obj -> range mode; min defaults to max if missing, max defaults to min
+            //                    or 0 if both missing. max is clamped to pack size at stage time.
+            int pickMin, pickMax;
+            ParsePick(node, out pickMin, out pickMax);
             List<object> pulls = Utils.GetValue<List<object>>(node, "pulls");
-            Console.WriteLine("[Roguelike] openpack enter: packs=" + packs + " pick=" + pick + " pulls=" + (pulls != null ? pulls.Count : 0));
+            Console.WriteLine("[Roguelike] openpack enter: packs=" + packs + " pick=" + pickMin + "-" + pickMax +
+                " pulls=" + (pulls != null ? pulls.Count : 0));
 
             // pity: action.pity = false disables; merge global+asc+action
             object pityRaw;
@@ -215,7 +223,7 @@ namespace YgoMaster
             }
 
             int size = allCards.Count;
-            Console.WriteLine("[Roguelike] openpack staged: packs=" + packs + " size=" + size + " pick=" + pick + " token=" + run.ActionToken);
+            Console.WriteLine("[Roguelike] openpack staged: packs=" + packs + " size=" + size + " pick=" + pickMin + "-" + pickMax + " token=" + run.ActionToken);
             if (size == 0)
             {
                 // No cards drawn (empty universe / over-filtered pool / weights all zero).
@@ -224,7 +232,12 @@ namespace YgoMaster
                 SetPending(run, Utils.GetValue<Dictionary<string, object>>(node, "next"));
                 return false;
             }
-            string mode = pick > 0 ? "pick" : "keep";
+            // Clamp the range to the rolled pack size (asking for 10 picks from a 5-card pack
+            // is nonsense). pickMax <= 0 implies keep mode regardless of how it was specified.
+            if (pickMax > size) pickMax = size;
+            if (pickMin > pickMax) pickMin = pickMax;
+            if (pickMin < 0) pickMin = 0;
+            string mode = pickMax > 0 ? "pick" : "keep";
             // Within each pack: sort DESC by rarity (cid asc tiebreaker) so the persisted order
             // matches what the vanilla Result VC shows (it always reorders rarity desc). Picks
             // indices from the client then map 1:1 to _cards[i] for the commit. The Gacha
@@ -245,8 +258,40 @@ namespace YgoMaster
             node["_cards"] = allCards.ConvertAll(c => (object)c);
             node["_size"] = size;
             node["_mode"] = mode;
-            node["_labels"] = BuildOpenPackLabels(node, pick, size);
+            node["_pickMin"] = pickMin;
+            node["_pickMax"] = pickMax;
+            node["_labels"] = BuildOpenPackLabels(node, pickMin, pickMax, size);
             return true;
+        }
+
+        // pick:
+        //   absent / null    -> 0/0 (keep mode)
+        //   N (int)          -> N/N
+        //   { min, max } obj -> uses both; defaults each to the other if only one present.
+        // Negative values are normalized to 0.
+        static void ParsePick(Dictionary<string, object> node, out int min, out int max)
+        {
+            min = 0; max = 0;
+            if (node == null) return;
+            object raw;
+            if (!node.TryGetValue("pick", out raw) || raw == null) return;
+            Dictionary<string, object> obj = raw as Dictionary<string, object>;
+            if (obj != null)
+            {
+                bool hasMin = obj.ContainsKey("min");
+                bool hasMax = obj.ContainsKey("max");
+                if (hasMin) try { min = Convert.ToInt32(obj["min"]); } catch { }
+                if (hasMax) try { max = Convert.ToInt32(obj["max"]); } catch { }
+                if (hasMin && !hasMax) max = min;
+                else if (hasMax && !hasMin) min = max;
+            }
+            else
+            {
+                try { max = Convert.ToInt32(raw); min = max; } catch { }
+            }
+            if (min < 0) min = 0;
+            if (max < 0) max = 0;
+            if (min > max) min = max;
         }
 
         static void SetPending(RoguelikeRun run, Dictionary<string, object> node)
@@ -289,9 +334,11 @@ namespace YgoMaster
                 // Only expose post-roll fields. If the node hasn't been rolled yet (e.g., 0-card stage
                 // already advanced), skip projection — the cursor moved on and Step will settle.
                 if (!cur.ContainsKey("_cards")) return null;
-                data["mode"]   = Utils.GetValue<string>(cur, "_mode");
-                data["pick"]   = Utils.GetValue<int>(cur, "pick", 0);
-                data["size"]   = Utils.GetValue<int>(cur, "_size");
+                data["mode"]    = Utils.GetValue<string>(cur, "_mode");
+                // pick == max for retrocompat (older clients read just `pick`); pickMin is new.
+                data["pick"]    = Utils.GetValue<int>(cur, "_pickMax");
+                data["pickMin"] = Utils.GetValue<int>(cur, "_pickMin");
+                data["size"]    = Utils.GetValue<int>(cur, "_size");
                 data["labels"] = Utils.GetValue<Dictionary<string, object>>(cur, "_labels") ?? new Dictionary<string, object>();
             }
             return new Dictionary<string, object>
@@ -396,9 +443,12 @@ namespace YgoMaster
             return "?";
         }
 
-        // Resolve labels with passthrough; interpolate {0}=pick, {1}=size in title_pick only.
+        // Resolve labels with passthrough; interpolate title_pick with {0}=max, {1}=size, {2}=min
+        // (positional retrocompat: existing templates using {0}=pick, {1}=size still work, because
+        // pickMax replaces pick when min==max). confirm_label is left as-is — the client formats
+        // it live with the running selection count.
         // Returns ONLY the keys the action specified — client falls back to RoguelikeLabels defaults.
-        static Dictionary<string, object> BuildOpenPackLabels(Dictionary<string, object> node, int pick, int size)
+        static Dictionary<string, object> BuildOpenPackLabels(Dictionary<string, object> node, int pickMin, int pickMax, int size)
         {
             if (node == null) return new Dictionary<string, object>();
             string titleKeep = Utils.GetValue<string>(node, "title_keep", null);
@@ -406,7 +456,7 @@ namespace YgoMaster
             string confirm   = Utils.GetValue<string>(node, "confirm_label", null);
             Dictionary<string, object> r = new Dictionary<string, object>();
             if (titleKeep != null) r["title_keep"] = titleKeep;
-            if (titlePick != null) r["title_pick"] = string.Format(titlePick, pick, size);
+            if (titlePick != null) r["title_pick"] = string.Format(titlePick, pickMax, size, pickMin);
             if (confirm   != null) r["confirm"]    = confirm;
             return r;
         }
