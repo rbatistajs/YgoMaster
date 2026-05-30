@@ -267,6 +267,28 @@ namespace YgoMaster
                     if (nxt != null) ValidateActionNode(nxt);
                     return;
                 }
+                case "lp":
+                case "gold":
+                {
+                    bool hasAbs = node.ContainsKey("delta");
+                    bool hasPct = node.ContainsKey("delta_percent");
+                    if (hasAbs == hasPct) throw new Exception(type + ": exactly one of 'delta'/'delta_percent' required");
+                    if (hasAbs)
+                    {
+                        try { Convert.ToInt32(node["delta"]); } catch { throw new Exception(type + ": 'delta' must be int"); }
+                    }
+                    else
+                    {
+                        double p;
+                        try { p = Convert.ToDouble(node["delta_percent"]); }
+                        catch { throw new Exception(type + ": 'delta_percent' must be number"); }
+                        if (p < -1.0 || p > 1.0)
+                            Console.WriteLine("[Roguelike] " + type + ": delta_percent " + p + " out of [-1,1]; clamped at apply time");
+                    }
+                    Dictionary<string, object> nxt = Utils.GetValue<Dictionary<string, object>>(node, "next");
+                    if (nxt != null) ValidateActionNode(nxt);
+                    return;
+                }
                 default:
                     // Unknown types are tolerated (engine treats them as terminal no-ops).
                     return;

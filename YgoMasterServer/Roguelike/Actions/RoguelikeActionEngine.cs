@@ -132,12 +132,49 @@ namespace YgoMaster
                     if (!RollOpenPack(run, clone, dataDirectory, regulation)) continue; // 0 cards drawn -> advance
                     return; // staged; awaits picks
                 }
+                else if (type == "lp")
+                {
+                    ApplyStatLp(run, node);
+                    SetPending(run, Utils.GetValue<Dictionary<string, object>>(node, "next"));
+                }
+                else if (type == "gold")
+                {
+                    ApplyStatGold(run, node);
+                    SetPending(run, Utils.GetValue<Dictionary<string, object>>(node, "next"));
+                }
                 else
                 {
-                    // v2: apply a state-mutating leaf here, then SetPending(next) or null.
-                    SetPending(run, null); // v1: unknown leaf -> end
+                    SetPending(run, null); // unknown leaf -> end
                 }
             }
+        }
+
+        // Read delta fields from an lp action node and apply via the run helper. The XOR contract
+        // (delta vs delta_percent) is enforced at load time (RoguelikeEncounters.ValidateActionNode).
+        // If LP hits 0, marks the run inactive — game over, same path as a combat loss.
+        static void ApplyStatLp(RoguelikeRun run, Dictionary<string, object> node)
+        {
+            int? abs = null; double? pct = null;
+            object v;
+            if (node.TryGetValue("delta", out v)) { try { abs = Convert.ToInt32(v); } catch { } }
+            if (node.TryGetValue("delta_percent", out v)) { try { pct = Convert.ToDouble(v); } catch { } }
+            bool killed;
+            int newLp = run.ApplyLpDelta(abs, pct, out killed);
+            Console.WriteLine("[Roguelike] lp action: delta=" + (abs.HasValue ? abs.Value.ToString() : "pct " + pct) +
+                " -> lp=" + newLp + (killed ? " (LETHAL)" : ""));
+            if (killed) run.Active = false;
+        }
+
+        // Read delta fields from a gold action node and apply via the run helper.
+        static void ApplyStatGold(RoguelikeRun run, Dictionary<string, object> node)
+        {
+            int? abs = null; double? pct = null;
+            object v;
+            if (node.TryGetValue("delta", out v)) { try { abs = Convert.ToInt32(v); } catch { } }
+            if (node.TryGetValue("delta_percent", out v)) { try { pct = Convert.ToDouble(v); } catch { } }
+            int newGold = run.ApplyGoldDelta(abs, pct);
+            Console.WriteLine("[Roguelike] gold action: delta=" + (abs.HasValue ? abs.Value.ToString() : "pct " + pct) +
+                " -> gold=" + newGold);
         }
 
         // Roll cards for this openpack node and stash them on the node ("_cards"/"_size"/"_mode"/"_labels").

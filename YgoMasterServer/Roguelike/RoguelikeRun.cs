@@ -44,7 +44,7 @@ namespace YgoMaster
                 { "map", Map },
                 { "position", Position },
                 { "visited", Visited ?? new List<object>() },
-                { "currency", Currency },
+                { "gold", Currency },
                 { "pendingDuelNode", PendingDuelNode },
                 { "pendingEncounterId", PendingEncounterId ?? "" },
                 { "lp", Lp },
@@ -75,7 +75,7 @@ namespace YgoMaster
                 Map        = Utils.GetValue<Dictionary<string, object>>(d, "map"),
                 Position   = Utils.GetValue<int>(d, "position", -1),
                 Visited    = Utils.GetValue<List<object>>(d, "visited"),
-                Currency   = Utils.GetValue<int>(d, "currency", 0),
+                Currency   = Utils.GetValue<int>(d, "gold", Utils.GetValue<int>(d, "currency", 0)),
                 PendingDuelNode = Utils.GetValue<int>(d, "pendingDuelNode", -1),
                 PendingEncounterId = Utils.GetValue<string>(d, "pendingEncounterId", ""),
                 Lp         = Utils.GetValue<int>(d, "lp", Utils.GetValue<int>(d, "hp", 0)),    // hp = legacy key
@@ -160,6 +160,32 @@ namespace YgoMaster
             List<object> rs  = Utils.GetValue<List<object>>(sec, "r")   ?? new List<object>();
             ids.Add(cardId); rs.Add(1);
             sec["ids"] = ids; sec["r"] = rs;
+        }
+
+        // Apply an LP delta from a stat action. Exactly one of absDelta / pctDelta is
+        // non-null (validated at load time). pctDelta is a fraction of MaxLp (e.g. -0.30 =
+        // -30% of max). Clamps to [0, MaxLp]. Sets killed=true when the result hits 0 so the
+        // caller can mark the run dead (game over, same path as a combat loss).
+        public int ApplyLpDelta(int? absDelta, double? pctDelta, out bool killed)
+        {
+            int delta = absDelta ?? (int)Math.Round(MaxLp * (pctDelta ?? 0.0));
+            int newLp = Lp + delta;
+            if (newLp > MaxLp) newLp = MaxLp;
+            if (newLp < 0) newLp = 0;
+            Lp = newLp;
+            killed = newLp <= 0;
+            return newLp;
+        }
+
+        // Apply a gold delta from a stat action. pctDelta is a fraction of CURRENT gold (no
+        // max cap). Clamps at 0 (no negative gold), no upper bound.
+        public int ApplyGoldDelta(int? absDelta, double? pctDelta)
+        {
+            int delta = absDelta ?? (int)Math.Round(Currency * (pctDelta ?? 0.0));
+            int newGold = Currency + delta;
+            if (newGold < 0) newGold = 0;
+            Currency = newGold;
+            return newGold;
         }
 
         // MiniJSON deserializes the "pity" object's values as boxed objects; coerce to int here.
