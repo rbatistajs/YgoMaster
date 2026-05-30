@@ -21,6 +21,7 @@ namespace YgoMasterClient
         const string HeaderGroup = HeaderArea + ".HeaderButtonGroup";      // kept visible; we reuse its texts
         const string HeaderName = HeaderGroup + ".NameText";               // title (left); also the boss-label TMP template
         const string HeaderLp = HeaderGroup + ".DeckNum.TextDeckNumValue"; // repurposed "0/999" slot -> run LP (right)
+        const string HeaderGold = HeaderGroup + ".GoldNum.TextDeckNumValue"; // cloned DeckNum sibling -> run gold
         const string RgScrollViewPath = DeckGroup + ".RgScrollView";
         const string RgMapPath = RgScrollViewPath + ".RgViewport.RgMap";
 
@@ -67,6 +68,19 @@ namespace YgoMasterClient
         static IntPtr _extScroll; // our RgScrollView's ExtendedScrollRect (identity for the Start hook)
         static IntPtr _markerSource; // cached PlayerIcon clone (Home is inactive once a run is open)
         static bool _ready;
+        static IntPtr _goldLabelGo;  // cloned DeckNum sibling for run gold (spawned once)
+
+        // Stat-change animation state (LP / gold). _snap.Valid==false means "first read since the
+        // map opened" -> baseline only, no animation. Diff runs only while the map is on-screen, so
+        // an LP change during a duel animates when the player returns (post-combat reuses this path).
+        struct HudSnap { public bool Valid; public int Lp; public int Gold; }
+        static HudSnap _snap;
+        static readonly System.Collections.Generic.List<RoguelikeStatAnim.FloatingDelta> _floaters =
+            new System.Collections.Generic.List<RoguelikeStatAnim.FloatingDelta>();
+        static readonly System.Collections.Generic.List<RoguelikeStatAnim.HudCounter> _counters =
+            new System.Collections.Generic.List<RoguelikeStatAnim.HudCounter>();
+        // Wall-clock dt source — the IL2CPP wrappers here don't expose UnityEngine.Time.deltaTime.
+        static System.Diagnostics.Stopwatch _animClock;
 
         // ExtendedScrollRect.Start()/Initialize() resets dragScrollEnabled to false after our
         // OnCreatedView set, so re-assert it post-Start. Global hook (one per method); only our
@@ -247,6 +261,17 @@ namespace YgoMasterClient
             // inactive — encounter actions push other VCs on top) means we're still in-flow.
             // Pointer becomes IntPtr.Zero when the user navigates back to home; flag drops to false.
             RoguelikeFlow.InRoguelike = _go != IntPtr.Zero;
+            // Stat animation pipeline (lp/gold actions + post-combat). Runs only while the map is
+            // visible so a change mid-duel animates on return. Diff detects -> spawns floaters ->
+            // floaters arm the deferred HUD counters. Must run before the refresh block so the
+            // counter captures the old value before SetLpText (in Refresh) snaps the label.
+            if (IsActive(_go))
+            {
+                DetectStatDiff();
+                float dt = NextAnimDt();
+                RoguelikeStatAnim.TickFloaters(_floaters, dt, _tmpType, _anchoredPos3D);
+                RoguelikeStatAnim.TickCounters(_counters, dt, SetTmpText);
+            }
             // Pending post-duel refresh: apply only once the map is visible again (fresh ClientWork).
             if (_refreshPending && IsActive(_go))
             {
@@ -430,6 +455,141 @@ namespace YgoMasterClient
             Hide(go, HeaderGroup + ".DeckNum.IconDeckNum"); // drop the deck icon; keep just the LP text
             IntPtr deckNum = GameObject.FindGameObjectByPath(go, HeaderGroup + ".DeckNum");
             if (deckNum != IntPtr.Zero) GameObject.SetActive(deckNum, true); // ensure the LP slot shows
+            EnsureGoldLabel(go);
+        }
+
+        // Clone the DeckNum subtree once into a sibling GoldNum, offset to the right of the LP slot.
+        // Same TMP child structure so SetTmpText(HeaderGold,...) targets the parallel path.
+        static void EnsureGoldLabel(IntPtr go)
+        {
+            if (_goldLabelGo != IntPtr.Zero && IsAlive(_goldLabelGo)) return;
+            IntPtr src = GameObject.FindGameObjectByPath(go, HeaderGroup + ".DeckNum");
+            IntPtr parentGo = GameObject.FindGameObjectByPath(go, HeaderGroup);
+            if (src == IntPtr.Zero || parentGo == IntPtr.Zero) return;
+            IntPtr clone = UnityObject.Instantiate(src, GameObject.GetTransform(parentGo));
+            UnityObject.SetName(clone, "GoldNum");
+            Hide(clone, "IconDeckNum"); // no icon (placeholder for a future gold sprite)
+            Vector3 p = new Vector3(150f, 0, 0); // sit to the right of the LP slot (tune visually)
+            _anchoredPos3D.GetSetMethod().Invoke(GameObject.GetTransform(clone), new IntPtr[] { new IntPtr(&p) });
+            GameObject.SetActive(clone, true);
+            _goldLabelGo = clone;
+        }
+
+        // ---- Stat animation (lp/gold) ----
+
+        // Wall-clock dt between Update() calls (no Unity Time wrapper here). First call returns 0;
+        // capped at 0.1s to swallow debugger pauses / hitches.
+        static float NextAnimDt()
+        {
+            if (_animClock == null) { _animClock = System.Diagnostics.Stopwatch.StartNew(); return 0f; }
+            float dt = (float)_animClock.Elapsed.TotalSeconds;
+            _animClock.Restart();
+            return dt > 0.1f ? 0.1f : dt;
+        }
+
+        // Compare current run stats vs the last snapshot; spawn a floater + HUD counter for each
+        // non-zero delta. First call (or after a reset) just captures the baseline silently.
+        static void DetectStatDiff()
+        {
+            if (!RoguelikeApi.IsRunActive()) { ResetAnim(); return; }
+            int curLp = RoguelikeApi.Lp();
+            int curGold = RoguelikeApi.Gold();
+            if (!_snap.Valid) { _snap = new HudSnap { Valid = true, Lp = curLp, Gold = curGold }; return; }
+            int dLp = curLp - _snap.Lp;
+            int dGold = curGold - _snap.Gold;
+            if (dLp != 0)
+                SpawnDelta("lp", dLp, _snap.Lp, curLp, HeaderLp,
+                    cur => RoguelikeLabels.Get("map.lp", "LP {0} / {1}", cur, RoguelikeApi.MaxLp()));
+            if (dGold != 0)
+                SpawnDelta("gold", dGold, _snap.Gold, curGold, HeaderGold,
+                    cur => RoguelikeLabels.Get("map.gold", "GOLD {0}", cur));
+            _snap.Lp = curLp; _snap.Gold = curGold;
+        }
+
+        // Cancel in-flight floaters/counters (destroy GOs) and clear the baseline. Used when the run
+        // ends so a fresh run re-captures a baseline instead of animating from stale values.
+        static void ResetAnim()
+        {
+            foreach (RoguelikeStatAnim.FloatingDelta f in _floaters)
+                if (f.Go != IntPtr.Zero) UnityObject.Destroy(f.Go);
+            _floaters.Clear();
+            _counters.Clear();
+            _snap = default(HudSnap);
+        }
+
+        // Build one FloatingDelta (clone of the HUD label, centered, sign-tinted) + its deferred
+        // HudCounter. `from` is the OLD value (snapshot) so a fresh counter animates old->new even if
+        // SetLpText already snapped the label. An in-flight counter for the same label is retargeted
+        // from its currently displayed value (no snap).
+        static void SpawnDelta(string stat, int delta, int from, int to, string labelPath,
+                               Func<int, string> format)
+        {
+            IntPtr labelGo = GameObject.FindGameObjectByPath(_go, labelPath);
+            if (labelGo == IntPtr.Zero) return;
+            IntPtr clone = UnityObject.Instantiate(labelGo, GameObject.GetTransform(_go));
+            UnityObject.SetName(clone, "RgStatFloater_" + stat);
+
+            float r, g, b;
+            if (delta > 0) { r = RoguelikeStatAnim.PosR; g = RoguelikeStatAnim.PosG; b = RoguelikeStatAnim.PosB; }
+            else           { r = RoguelikeStatAnim.NegR; g = RoguelikeStatAnim.NegG; b = RoguelikeStatAnim.NegB; }
+            IntPtr tmp = GameObject.GetComponent(clone, _tmpType);
+            if (tmp != IntPtr.Zero)
+            {
+                string sign = delta > 0 ? "+" : "";
+                string label = stat == "lp"
+                    ? RoguelikeLabels.Get("anim.lp.delta", "{0}{1} LP", sign, delta)
+                    : RoguelikeLabels.Get("anim.gold.delta", "{0}{1} GOLD", sign, delta);
+                TMPro.TMP_Text.SetText(tmp, label);
+                TMPro.TMP_Text.SetColor(tmp, r, g, b, 1f);
+            }
+
+            Vector3 endPos = GetAnchoredPos3D(GameObject.GetTransform(labelGo));
+            float yOff = stat == "lp" ? 60f : -60f; // LP up, GOLD down when both fire at once
+            Vector3 startPos = new Vector3(0, yOff, 0);
+            _anchoredPos3D.GetSetMethod().Invoke(GameObject.GetTransform(clone), new IntPtr[] { new IntPtr(&startPos) });
+
+            RoguelikeStatAnim.HudCounter counter = _counters.Find(c => c.LabelPath == labelPath);
+            if (counter != null)
+            {
+                counter.From = ReadCurrentDisplayed(labelPath, from);
+                counter.To = to; counter.T = 0; counter.Active = false;
+            }
+            else
+            {
+                counter = new RoguelikeStatAnim.HudCounter
+                { LabelPath = labelPath, From = from, To = to, T = 0, Active = false, Format = format };
+                _counters.Add(counter);
+            }
+
+            _floaters.Add(new RoguelikeStatAnim.FloatingDelta
+            { Go = clone, StartPos = startPos, EndPos = endPos, T = 0, R = r, G = g, B = b, Pending = counter });
+        }
+
+        // Extract the displayed integer from a HUD label (for retargeting a mid-flight counter).
+        static int ReadCurrentDisplayed(string labelPath, int fallback)
+        {
+            IntPtr go = GameObject.FindGameObjectByPath(_go, labelPath);
+            if (go == IntPtr.Zero) return fallback;
+            IntPtr tmp = GameObject.GetComponent(go, _tmpType);
+            if (tmp == IntPtr.Zero) return fallback;
+            string s = TMPro.TMP_Text.GetText(tmp);
+            System.Text.RegularExpressions.Match m =
+                System.Text.RegularExpressions.Regex.Match(s ?? "", @"-?\d+");
+            int v;
+            return m.Success && int.TryParse(m.Value, out v) ? v : fallback;
+        }
+
+        static Vector3 GetAnchoredPos3D(IntPtr t)
+        {
+            return _anchoredPos3D.GetGetMethod().Invoke(t).GetValueRef<Vector3>();
+        }
+
+        // True while a HUD counter is animating the given label — SetLpText skips it so the snap
+        // doesn't clobber the tween.
+        static bool IsLabelCountering(string labelPath)
+        {
+            foreach (RoguelikeStatAnim.HudCounter c in _counters) if (c.LabelPath == labelPath) return true;
+            return false;
         }
 
         // Keep the header pickup button visible and rewire its click to open the run deck editor.
@@ -458,7 +618,12 @@ namespace YgoMasterClient
             string title = RoguelikeLabels.Get("map.title", "Mapa da Run   ·   Ato {0}/{1}", RoguelikeApi.Act() + 1, acts);
             if (asc > 0) title += RoguelikeLabels.Get("map.title.asc", "   ·   Asc {0}", asc);
             SetTmpText(HeaderName, title);
-            SetTmpText(HeaderLp, RoguelikeLabels.Get("map.lp", "LP {0} / {1}", RoguelikeApi.Lp(), RoguelikeApi.MaxLp()));
+            // Skip the HUD label writes while a counter is animating that label — the counter writes
+            // the interpolated value each frame; a render-time snap here would fight the tween.
+            if (!IsLabelCountering(HeaderLp))
+                SetTmpText(HeaderLp, RoguelikeLabels.Get("map.lp", "LP {0} / {1}", RoguelikeApi.Lp(), RoguelikeApi.MaxLp()));
+            if (!IsLabelCountering(HeaderGold))
+                SetTmpText(HeaderGold, RoguelikeLabels.Get("map.gold", "GOLD {0}", RoguelikeApi.Gold()));
         }
 
         static void SetTmpText(string path, string text)

@@ -17,6 +17,12 @@ namespace TMPro
     {
         static IL2Method methodGetText;
         static IL2Method methodSetText;
+        static IL2Method methodSetColor;
+
+        // UnityEngine.Color memory layout (4 sequential floats) — passed by pointer to the
+        // IL2CPP property setter, mirroring the spriteRenderer.color pattern elsewhere.
+        [StructLayout(LayoutKind.Sequential)]
+        struct ColorRGBA { public float r, g, b, a; }
 
         static TMP_Text()
         {
@@ -24,6 +30,7 @@ namespace TMPro
             IL2Class classInfo = assembly.GetClass("TMP_Text", "TMPro");
             methodGetText = classInfo.GetProperty("text").GetGetMethod();
             methodSetText = classInfo.GetProperty("text").GetSetMethod();
+            methodSetColor = classInfo.GetProperty("color").GetSetMethod();
         }
 
         public static string GetText(IntPtr thisPtr)
@@ -35,6 +42,12 @@ namespace TMPro
         public static void SetText(IntPtr thisPtr, string value)
         {
             methodSetText.Invoke(thisPtr, new IntPtr[] { new IL2String(value).ptr });
+        }
+
+        public static void SetColor(IntPtr thisPtr, float r, float g, float b, float a)
+        {
+            ColorRGBA c = new ColorRGBA { r = r, g = g, b = b, a = a };
+            methodSetColor.Invoke(thisPtr, new IntPtr[] { new IntPtr(&c) });
         }
     }
 }

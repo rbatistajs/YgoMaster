@@ -376,6 +376,10 @@ namespace YgoMasterClient
         public static int Lp() { return YgomSystem.Utility.ClientWork.GetByJsonPath<int>("Roguelike.lp"); }
         public static int MaxLp() { return YgomSystem.Utility.ClientWork.GetByJsonPath<int>("Roguelike.maxLp"); }
 
+        // Current run gold (= Currency server-side, renamed in wire). Used by the map HUD
+        // label and the animation diff snapshot.
+        public static int Gold() { return YgomSystem.Utility.ClientWork.GetByJsonPath<int>("Roguelike.gold"); }
+
         // ----- run deck (for the in-run deck editor view) -----
 
         // Card ids of the chosen run deck's main / extra section (with duplicates, as built). Shape:
