@@ -28,7 +28,7 @@ cartas).
 
 - `RoguelikeActionEngine` roda `options` / `message` / `openpack`. Cada
   uma pausa via `PendingAction` (cliente ack pra avançar).
-- `RoguelikeRun` tem `PlayerLp` (int) e `Reward` (int — gold acumulado
+- `RoguelikeRun` tem `Lp` (int) e `Currency` (int — gold acumulado
   por vitórias).
 - HUD do `RoguelikeMapScreen` reusa slot `HeaderButtonGroup.DeckNum`
   pra mostrar `"LP X / Y"`. Gold não é exibido.
@@ -42,15 +42,15 @@ cartas).
 ```json
 { "type": "lp",
   "delta": -500,                 // OPCIONAL — int absoluto
-  "delta_percent": -0.30 }       // OPCIONAL — fração do PlayerMaxLp (-1.0..+1.0)
+  "delta_percent": -0.30 }       // OPCIONAL — fração do MaxLp (-1.0..+1.0)
 ```
 
 - **XOR** dos dois campos: exatamente um deve estar presente. Ambos
   ausentes ou ambos presentes → warn no loader + drop da action.
-- `delta_percent` aplicado sobre `PlayerMaxLp` (não sobre LP atual).
+- `delta_percent` aplicado sobre `MaxLp` (não sobre LP atual).
   Ex.: `-0.30` num `maxLp = 8000` = `-2400`. Round half-even pra int.
 - `delta_percent` fora de `[-1, 1]` → warn + clamp ao range.
-- **Clamp superior:** `min(novo, PlayerMaxLp)` — heal não estoura max.
+- **Clamp superior:** `min(novo, MaxLp)` — heal não estoura max.
 - **Clamp inferior:** `0`. Se `novo <= 0`: game over (mesmo path da
   derrota em combat — reusa `run.IsDead()` / state já existente).
 - Sem ack do player; engine roda direto e vai pro `next` (se houver).
@@ -100,10 +100,12 @@ public int ApplyGoldDelta(int? absDelta, double? pctDelta);
 Sem campo `PendingGameOver` novo — game over por LP=0 marca state já
 existente (mesma path da derrota em combat).
 
-### `WriteRun` wire
+### `WriteRun` wire + disk format
 
-- **Renomear** `reward` → `gold` no JSON do `$.Roguelike.run`. Nome
-  interno server-side fica `Reward` (alias só na serialização).
+- **Renomear** `currency` → `gold` no `ToDictionary()`/`FromDictionary()`.
+  Field interno `Currency` mantém o nome.
+- `FromDictionary` lê `gold` primeiro, fallback pra `currency` (back-compat
+  pra `roguelike.json` antigos no disco).
 - **Não emitir** delta/lastDeltas — animação é diff client-side.
 - Sem campo `pendingAction` pra lp/gold.
 
