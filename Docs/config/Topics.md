@@ -28,4 +28,4 @@ To Show normal Text use the Following Template for. (Replace the Custom Message 
 	
 The Text item must have the locale or it will fail to display the text.
 
-It's strongly recommended to log topics from Master Duel using Fiddler to find how different types of topics are structured. See [Updating.md](Updating.md) on how to do this.
+It's strongly recommended to log topics from Master Duel using Fiddler to find how different types of topics are structured. See [Updating.md](../Updating.md) on how to do this.

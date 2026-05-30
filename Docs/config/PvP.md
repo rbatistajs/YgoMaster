@@ -55,7 +55,7 @@ Once LAN is working (ideally with two computers two test it on). You can try set
 - Clicking mates / duel field borders are synced with the other player. Spectators also see it but their clicks don't sync
 - Sometimes clients bug out if you restart YgoMaster while in a duel (when you next enter a duel one client will get stuck before starting the duel). Restart all clients when reopening YgoMaster
 - Play around with `MultiplayerNoDelay` (`Settings.json` / `ClientSettings.json`) to see which works best for you (it disables nagle's algorithm)
-- Releases include a folder called `YgoMaster/Data/CardData/`. To Generate that folder yourself read [Updating.md](Updating.md)
+- Releases include a folder called `YgoMaster/Data/CardData/`. To Generate that folder yourself read [Updating.md](../Updating.md)
 - Client updates can break PvP. If you'd like to keep using PvP with YgoMaster you should wait until a new release before letting Steam update the client
 
 ## Starting duels

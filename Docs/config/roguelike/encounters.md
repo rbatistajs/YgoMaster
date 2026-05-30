@@ -253,7 +253,16 @@ An option whose `next` is `null` or missing ends the tree.
 {
   "type": "openpack",
   "packs": 3,                 // how many packs to open in sequence (default 1)
-  "pick": 0,                  // 0 = keep all; >0 = player picks exactly X out of all cards shown
+
+  // pick accepts three shapes:
+  //   0 / missing  -> keep all (no selection UI; player just confirms the result)
+  //   N (int > 0)  -> exact pick (must select exactly N)
+  //   { min, max } -> range pick (must select between min and max, inclusive)
+  // max is automatically clamped to the rolled pack size at stage time.
+  // Use min: 0 to make the selection optional (player can confirm with nothing selected,
+  // discarding the reward).
+  "pick": { "min": 1, "max": 3 },
+
   "pulls": [
     { "count": 6, "pool": { "source": "any", "random": "monster" } },
     { "count": 1, "pool": { "source": "any", "random": "spell"   } },
@@ -266,10 +275,13 @@ An option whose `next` is `null` or missing ends the tree.
   "pity": { "UR": { "increment": 20 } },
 
   // Optional UI labels (Brazilian Portuguese defaults via RoguelikeLabels).
-  // {0} = pick count, {1} = total shown.
+  // title_pick    placeholders: {0} = max picks, {1} = total shown, {2} = min picks.
+  // confirm_label placeholders: {0} = live count, {1} = max picks, {2} = min picks.
+  // Existing templates using only {0}/{1} keep working: when min == max, {1} reads the same
+  // number the older "pick required" did.
   "title_keep":    "Cartas obtidas",
-  "title_pick":    "Selecione {0} de {1} cartas",
-  "confirm_label": "Confirmar",
+  "title_pick":    "Selecione de {2} a {0} cards (de {1})",
+  "confirm_label": "Confirmar {0} ({2}-{1})",
 
   // Next action after the player confirms; same shape as `option.next`. Null/missing ends the tree.
   "next": null
@@ -281,8 +293,12 @@ An option whose `next` is `null` or missing ends the tree.
   a failed pull is skipped (that pack ends up with fewer cards). Each pull's `pool` is a random
   spec (same fields as the modifiers' [random spec](#modifiers-starting-board)), so `source`,
   `random`, `subtype`, numeric filters, and the new `rarity` / `rarities` filter all work.
-- **`pick` vs total** — `pick` is over the **total** shown in the result UI. With `packs: 3` and
-  `sum(pulls.count) = 8`, the result shows 24 cards; `pick: 5` makes the player choose 5.
+- **`pick` vs total** — pick bounds are over the **total** shown in the result UI. With
+  `packs: 3` and `sum(pulls.count) = 8`, the result shows 24 cards; `pick: 5` makes the player
+  choose exactly 5, `pick: { min: 1, max: 5 }` lets them pick between 1 and 5.
+- **`pick` clamping** — `max` is clamped down to the rolled size automatically (asking for 10
+  picks from a 5-card pack just allows up to 5). `min` is validated at load time and must not
+  exceed total size, otherwise the action would be unfinishable.
 - **Pity** — every pack ticks the run's per-rarity pity counter (no card of rarity `r` → `pity[r]++`;
   any card whose rarity is in `reset_on[r]` → `pity[r] = 0`). The bonus
   `min(pity[r] * increment, max)` is added to `rarityRates[r]` on the next pack. Merge order:

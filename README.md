@@ -10,7 +10,7 @@ Offline Yu-Gi-Oh! Master Duel (PC)
 - Open packs
 - Solo content
 - Custom CPU duels
-- [PvP duels / friends / trading](Docs/PvP.md)
+- [PvP duels / friends / trading](Docs/config/PvP.md)
 - Duel replays
 - YDK / YDKe support
 - Card collection stats / deck editor sub menu improvements
@@ -31,11 +31,11 @@ YgoMaster is portable and can be used on any machine without Steam installed aft
 
 Additionally...
 
-- [It's recommended that you tailor the server settings to your preferences](Docs/Settings.md)
+- [It's recommended that you tailor the server settings to your preferences](Docs/config/Settings.md)
 - Download [VG.TCG.Decks.7z](https://github.com/pixeltris/YgoMaster/releases/download/v1.4/VG.TCG.Decks.7z) for ~6000 decks from the YGO video games
 - The custom duel starter UI can be accessed using the DUEL button on the home screen
 - When updating copy your `/YgoMaster/Data/Players/` folder
-- [How to change language](Docs/ChangingLanguage.md)
+- [How to change language](Docs/config/ChangingLanguage.md)
 - [How to run on Linux](Docs/Linux.md)
 
 ## Compiling from source

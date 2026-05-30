@@ -33,7 +33,7 @@ Certain logs will be dumped as json into `%USERPROFILE%/Documents/Fiddler2/Captu
 - Copy all files in `YgoMasterUpdate/SoloNpcDeckIds/` to `YgoMaster/Data/SoloNpcDeckIds/`
 - Run `YgoMaster.exe --merge-deckids` to update `SoloNpcDeckIds.json` based on the `SoloNpcDeckIds` files
 
-*To log this data faster add `"AlwaysWin": true` to `ClientSettings.json` to win duels [on the live game](LiveMods.md) by surrendering.*
+*To log this data faster add `"AlwaysWin": true` to `ClientSettings.json` to win duels [on the live game](config/LiveMods.md) by surrendering.*
 
 ## Shop
 
@@ -96,7 +96,7 @@ These values need to be updated on client updates if you use PvP. See [UpdatingP
 ## Enabling the client console
 
 - In `ClientSettings.json` set `ShowConsole` to `true` and run the YgoMasterClient.
-- You will probably want to inject into the live version of the game while doing this. See [LiveMods.md](LiveMods.md). This is a requirement if you want to complete solo with the `AlwaysWin` setting.
+- You will probably want to inject into the live version of the game while doing this. See [LiveMods.md](config/LiveMods.md). This is a requirement if you want to complete solo with the `AlwaysWin` setting.
 
 ## Client updates
 
