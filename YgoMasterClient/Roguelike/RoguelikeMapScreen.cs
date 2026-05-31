@@ -1003,20 +1003,30 @@ namespace YgoMasterClient
             _graphicColor.GetSetMethod().Invoke(g, new IntPtr[] { new IntPtr(&c) });
         }
 
-        // Card-illustration paths pinned (refcount bumped) so the game's UnloadUnusedAssets — which
-        // runs on screen changes / after an addCard release — can't evict them and leave a white node.
-        static readonly System.Collections.Generic.HashSet<string> _pinnedArt = new System.Collections.Generic.HashSet<string>();
+        // path -> our OWN copy of the card illustration. We blit the bundle texture into a Texture2D
+        // we control so the game's UnloadUnusedAssets (runs on screen changes, after an addCard
+        // release, when a deck-editor card sharing the same illust is freed) can't evict it and leave
+        // a white node. Cached so the copy happens once per art.
+        static readonly System.Collections.Generic.Dictionary<string, IntPtr> _ownedArt =
+            new System.Collections.Generic.Dictionary<string, IntPtr>();
 
-        // Texture for a card_<cid> spec via the game's ResourceManager: custom PNG in ClientData
-        // first, else the native MD bundle (has every card). Same path the Goat
-        // SoloChapterCardImage uses. Pinned once so it survives screen changes (else white nodes).
+        // Texture for a card_<cid> spec: load the game's illustration once, then return our owned copy
+        // (immune to the game's resource unloads). Same illust path the Goat SoloChapterCardImage uses.
         internal static IntPtr ResolveArtTexture(string iconImage)
         {
             if (!iconImage.StartsWith("card_")) return IntPtr.Zero;
             string path = "Card/Images/Illust/tcg/" + iconImage.Substring(5);
-            IntPtr tex = AssetHelper.LoadImmediateAsset(path);
-            if (tex != IntPtr.Zero && _pinnedArt.Add(path)) AssetHelper.AddAssetRef(path);
-            return tex;
+            IntPtr owned;
+            if (_ownedArt.TryGetValue(path, out owned) && owned != IntPtr.Zero) return owned;
+            IntPtr src = AssetHelper.LoadImmediateAsset(path);
+            if (src == IntPtr.Zero) return IntPtr.Zero;
+            IntPtr copy = AssetHelper.CopyTexture(src);
+            if (copy != IntPtr.Zero)
+            {
+                Import.Handler.il2cpp_gchandle_new(copy, true); // root so the IL2CPP GC keeps our copy alive
+                _ownedArt[path] = copy;
+            }
+            return copy != IntPtr.Zero ? copy : src; // fall back to the bundle texture if the copy failed
         }
 
         // Find a loaded sprite by name (Solo atlas icons), cached after the first lookup.

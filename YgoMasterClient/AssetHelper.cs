@@ -504,6 +504,45 @@ namespace YgoMasterClient
         // Load a texture / sprite https://forum.unity.com/threads/generating-sprites-dynamically-from-png-or-jpeg-files-in-c.343735
         // Save a texture https://github.com/sinai-dev/UniverseLib/blob/6e1654b9bc822cde06d3a845182e86e861878d14/src/Runtime/TextureHelper.cs#L100-L151
 
+        // Blit a (possibly bundle-owned) texture into a brand-new Texture2D that WE own, so the game's
+        // resource manager / UnloadUnusedAssets can't evict it (used to keep map node art alive across
+        // screen changes). Returns IntPtr.Zero on failure. Caller owns the result (cache + reuse it;
+        // don't copy per frame).
+        public static IntPtr CopyTexture(IntPtr texture)
+        {
+            bool swapped = false;
+            IL2Object origRT = null;
+            try
+            {
+                int width = methodGetWidth.Invoke(texture).GetValueRef<int>();
+                int height = methodGetHeight.Invoke(texture).GetValueRef<int>();
+                if (width == 0 || height == 0) return IntPtr.Zero;
+                int origFilter = methodGetFilterMode.Invoke(texture).GetValueRef<int>();
+                origRT = methodGetActive.Invoke();
+                int depthBuffer = 0, rtFormat = RenderTextureFormat_ARGB32;
+                IL2Object rt = methodGetTemporary.Invoke(new IntPtr[] { new IntPtr(&width), new IntPtr(&height), new IntPtr(&depthBuffer), new IntPtr(&rtFormat) });
+                if (rt == null) return IntPtr.Zero;
+                int filterMode = FilterMode_Point;
+                methodSetFilterMode.Invoke(rt.ptr, new IntPtr[] { new IntPtr(&filterMode) });
+                methodSetActive.Invoke(new IntPtr[] { rt.ptr });
+                swapped = true;
+                methodBlit.Invoke(new IntPtr[] { texture, rt.ptr });
+                IntPtr newTexture = Import.Object.il2cpp_object_new(texture2DClassInfo.ptr);
+                if (newTexture == IntPtr.Zero) { methodReleaseTemporary.Invoke(new IntPtr[] { rt.ptr }); return IntPtr.Zero; }
+                methodTexture2DCtor.Invoke(newTexture, new IntPtr[] { new IntPtr(&width), new IntPtr(&height) });
+                Rect sourceRect = new Rect(0, 0, width, height);
+                int destX = 0, destY = 0;
+                bool updateMipmaps = false, makeNoLongerReadable = false;
+                methodReadPixels.Invoke(newTexture, new IntPtr[] { new IntPtr(&sourceRect), new IntPtr(&destX), new IntPtr(&destY) });
+                methodApply.Invoke(newTexture, new IntPtr[] { new IntPtr(&updateMipmaps), new IntPtr(&makeNoLongerReadable) });
+                methodSetFilterMode.Invoke(newTexture, new IntPtr[] { new IntPtr(&origFilter) });
+                methodReleaseTemporary.Invoke(new IntPtr[] { rt.ptr });
+                return newTexture;
+            }
+            catch (Exception e) { Console.WriteLine("CopyTexture failed: " + e); return IntPtr.Zero; }
+            finally { if (swapped) methodSetActive.Invoke(new IntPtr[] { origRT != null ? origRT.ptr : IntPtr.Zero }); }
+        }
+
         static byte[] TextureToPNG(IntPtr texture)
         {
             bool swappedActiveRenderTexture = false;
