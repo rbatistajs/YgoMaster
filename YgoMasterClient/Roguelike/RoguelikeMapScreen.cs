@@ -73,7 +73,7 @@ namespace YgoMasterClient
         // Stat-change animation state (LP / gold). _snap.Valid==false means "first read since the
         // map opened" -> baseline only, no animation. Diff runs only while the map is on-screen, so
         // an LP change during a duel animates when the player returns (post-combat reuses this path).
-        struct HudSnap { public bool Valid; public int Lp; public int Gold; }
+        struct HudSnap { public bool Valid; public bool Active; public int Lp; public int Gold; }
         static HudSnap _snap;
         static readonly System.Collections.Generic.List<RoguelikeStatAnim.FloatingDelta> _floaters =
             new System.Collections.Generic.List<RoguelikeStatAnim.FloatingDelta>();
@@ -81,6 +81,10 @@ namespace YgoMasterClient
             new System.Collections.Generic.List<RoguelikeStatAnim.HudCounter>();
         // Wall-clock dt source — the IL2CPP wrappers here don't expose UnityEngine.Time.deltaTime.
         static System.Diagnostics.Stopwatch _animClock;
+        // Game-over detection: latch the active->dead edge (combat loss or lethal stat), then fire
+        // the defeat dialog once the LP->0 animation has drained. Re-armed when a new run goes active.
+        static bool _runWasActive;
+        static bool _pendingDefeat;
 
         // ExtendedScrollRect.Start()/Initialize() resets dragScrollEnabled to false after our
         // OnCreatedView set, so re-assert it post-Start. Global hook (one per method); only our
@@ -271,6 +275,21 @@ namespace YgoMasterClient
                 float dt = NextAnimDt();
                 RoguelikeStatAnim.TickFloaters(_floaters, dt, _tmpType, _anchoredPos3D);
                 RoguelikeStatAnim.TickCounters(_counters, dt, SetTmpText);
+            }
+            // Game over: the run died (active->false) without winning. Latch the edge, then show the
+            // defeat dialog once the LP->0 animation finished (floaters/counters drained) and the map
+            // is on screen. Covers both a lost duel (post-combat LP diff animates first) and a lethal
+            // stat action. The dialog's OK pops back to home.
+            {
+                bool active = RoguelikeApi.IsRunActive();
+                if (active && !_runWasActive) _pendingDefeat = false; // fresh run re-arms
+                if (_runWasActive && !active && !RoguelikeApi.Won()) _pendingDefeat = true;
+                _runWasActive = active;
+                if (_pendingDefeat && IsActive(_go) && _floaters.Count == 0 && _counters.Count == 0)
+                {
+                    _pendingDefeat = false;
+                    RoguelikeFlow.ShowDefeatAndReturnHome();
+                }
             }
             // Pending post-duel refresh: apply only once the map is visible again (fresh ClientWork).
             if (_refreshPending && IsActive(_go))
@@ -492,13 +511,23 @@ namespace YgoMasterClient
         }
 
         // Compare current run stats vs the last snapshot; spawn a floater + HUD counter for each
-        // non-zero delta. First call (or after a reset) just captures the baseline silently.
+        // non-zero delta. Re-baselines silently when a fresh run goes active (so a new run doesn't
+        // animate from the previous run's final values), but DOES diff the death frame (active
+        // true->false) so a lethal hit animates LP down to 0 before the defeat dialog.
         static void DetectStatDiff()
         {
-            if (!RoguelikeApi.IsRunActive()) { ResetAnim(); return; }
+            bool active = RoguelikeApi.IsRunActive();
             int curLp = RoguelikeApi.Lp();
             int curGold = RoguelikeApi.Gold();
-            if (!_snap.Valid) { _snap = new HudSnap { Valid = true, Lp = curLp, Gold = curGold }; return; }
+            // Fresh run (or first read): baseline only. Drop stale floaters/counters left from a
+            // previous run — their GOs died with the old map VC, so just clear the lists.
+            if (!_snap.Valid || (active && !_snap.Active))
+            {
+                _floaters.Clear();
+                _counters.Clear();
+                _snap = new HudSnap { Valid = true, Active = active, Lp = curLp, Gold = curGold };
+                return;
+            }
             int dLp = curLp - _snap.Lp;
             int dGold = curGold - _snap.Gold;
             if (dLp != 0)
@@ -507,18 +536,7 @@ namespace YgoMasterClient
             if (dGold != 0)
                 SpawnDelta("gold", dGold, _snap.Gold, curGold, HeaderGold,
                     cur => RoguelikeLabels.Get("map.gold", "GOLD {0}", cur));
-            _snap.Lp = curLp; _snap.Gold = curGold;
-        }
-
-        // Cancel in-flight floaters/counters (destroy GOs) and clear the baseline. Used when the run
-        // ends so a fresh run re-captures a baseline instead of animating from stale values.
-        static void ResetAnim()
-        {
-            foreach (RoguelikeStatAnim.FloatingDelta f in _floaters)
-                if (f.Go != IntPtr.Zero) UnityObject.Destroy(f.Go);
-            _floaters.Clear();
-            _counters.Clear();
-            _snap = default(HudSnap);
+            _snap.Lp = curLp; _snap.Gold = curGold; _snap.Active = active;
         }
 
         // Build one FloatingDelta (clone of the HUD label, centered, sign-tinted) + its deferred

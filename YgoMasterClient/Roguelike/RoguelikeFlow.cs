@@ -15,12 +15,17 @@ namespace YgoMasterClient
         // customize vanilla VCs (pack result, etc.) so they don't engage outside the run.
         public static bool InRoguelike;
 
+        static bool _gameOverShown;        // defeat dialog latched once per dead run (re-armed on start_run)
+
         public static void OnNetworkComplete(string cmd)
         {
             // Home is still active here; grab the PlayerIcon now (it goes inactive under the run screen).
             RoguelikeMapScreen.CaptureMarkerSource();
             if (cmd == "Roguelike.start_run")
+            {
+                _gameOverShown = false;
                 RoguelikeRunScreen.Open();                 // new run -> deck-choice screen
+            }
             else if (cmd == "Roguelike.choose_deck")
                 RoguelikeRunScreen.OnDeckChosen();         // close choice -> open the map
             else if (cmd == "Roguelike.move")
@@ -65,6 +70,27 @@ namespace YgoMasterClient
         }
 
         static void OnVictoryAck() { }
+
+        // Run over by death (lost a duel, took a 0-LP "win", or a lethal stat action). Shows a
+        // single-OK alert; OK pops the run screen back to home. Latched so it fires once per dead
+        // run. Called from RoguelikeMapScreen.Update once the LP->0 animation has drained.
+        public static void ShowDefeatAndReturnHome()
+        {
+            if (_gameOverShown) return;
+            _gameOverShown = true;
+            YgomGame.Menu.CommonDialogViewController.OpenConfirmationDialog(
+                RoguelikeLabels.Get("run.defeat.title", "Derrota"),
+                RoguelikeLabels.Get("run.defeat.msg", "Sua run acabou. Você foi derrotado."),
+                RoguelikeLabels.Get("common.ok", "OK"), OnDefeatAck);
+        }
+
+        static void OnDefeatAck()
+        {
+            // The run is already dead server-side (active=false); just leave the dead map. Home
+            // treats an inactive run as "no run" and offers a fresh one.
+            System.IntPtr manager = YgomGame.Menu.ContentViewControllerManager.GetManager();
+            if (manager != System.IntPtr.Zero) YgomSystem.UI.ViewControllerManager.PopChildViewController(manager);
+        }
 
         // Win/loss + the player's remaining LP, captured from the engine's Duel.end report (fires
         // before the Duel.end completion above). Stored regardless of mode; only consumed for
