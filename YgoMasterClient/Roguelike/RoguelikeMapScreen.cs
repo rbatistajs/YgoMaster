@@ -726,6 +726,11 @@ namespace YgoMasterClient
             {
                 int tok = _addCardAckToken; _addCardAckToken = -1;
                 RoguelikeApi.ActionRespond(tok);
+                // Destroying the cards ran BindingCardMaterial.OnReleaseResources, which unloads the
+                // shared card illustration — the same resource the node art uses (and which doesn't
+                // hold its own refcount). Re-render so SetNodeArt reloads those textures (else the
+                // matching boss nodes go white).
+                Refresh();
             }
         }
 
