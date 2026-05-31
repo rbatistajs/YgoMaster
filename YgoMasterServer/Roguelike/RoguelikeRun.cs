@@ -120,6 +120,29 @@ namespace YgoMaster
         // or just the collection.
         public int GetMainDeckSize()  => GetDeckSectionSize("m");
         public int GetExtraDeckSize() => GetDeckSectionSize("e");
+
+        // Copies of a CANONICAL card currently in the run deck (main + extra + side). Each deck id is
+        // resolved through CARD_Same first, so alt-art cids count toward the same canonical card. Used
+        // by reward routing to cap deck auto-add at the per-card copy / banlist limit.
+        public int CountCanonInDeck(string dataDir, int canon)
+        {
+            if (Deck == null) return 0;
+            Dictionary<string, object> deckInner = Utils.GetValue<Dictionary<string, object>>(Deck, "deck");
+            if (deckInner == null) return 0;
+            int count = 0;
+            foreach (string section in new[] { "m", "e", "s" })
+            {
+                Dictionary<string, object> sec = Utils.GetValue<Dictionary<string, object>>(deckInner, section);
+                List<object> ids = sec != null ? Utils.GetValue<List<object>>(sec, "ids") : null;
+                if (ids == null) continue;
+                foreach (object o in ids)
+                {
+                    int c; try { c = Convert.ToInt32(o); } catch { continue; }
+                    if (RoguelikeCardPool.Canon(dataDir, c) == canon) count++;
+                }
+            }
+            return count;
+        }
         int GetDeckSectionSize(string section)
         {
             if (Deck == null) return 0;

@@ -157,15 +157,19 @@ single `deck` object; if `deck` (or any key inside) is missing, the defaults bel
 }
 ```
 
-Routing rules applied on every reward (openpack pick / future card-reward nodes). The card
-goes to the **run collection** unconditionally; whether it *also* lands in the deck is decided
+Routing rules applied on every reward (openpack pick, `addCard`, future card-reward nodes). The
+card goes to the **run collection** unconditionally; whether it *also* lands in the deck is decided
 section by section (main vs. extra):
 
-1. Section already at its max (`maxMainCards` / `maxExtraCards`) → collection only.
-2. Main deck below `minCards` → always slot (keeps the deck legal to duel with). Extra has no
-   minimum.
-3. `autoAddToDeck: true` → also slot, up to the max.
-4. Otherwise → collection only.
+1. **Copy / banlist limit reached** → collection only. The deck may hold at most 3 copies of a card,
+   reduced by the run regulation's banlist (limited = 1, semi-limited = 2, forbidden = 0). Copies are
+   counted by **canonical card** (alt arts share the limit via `CARD_Same`), so a 4th copy — even a
+   different art — won't auto-slot.
+2. Section already at its max (`maxMainCards` / `maxExtraCards`) → collection only.
+3. Main deck below `minCards` → always slot (keeps the deck legal to duel with). Extra has no
+   minimum. (The copy/banlist limit in rule 1 still applies.)
+4. `autoAddToDeck: true` → also slot, up to the max.
+5. Otherwise → collection only.
 
 ### `deck.minCards`
 

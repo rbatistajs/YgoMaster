@@ -53,7 +53,7 @@ namespace YgoMaster
             }
             else if (type == "openpack")
             {
-                if (!CommitOpenPackPicks(run, cur, data, dataDirectory)) return false;
+                if (!CommitOpenPackPicks(run, cur, data, dataDirectory, regulation)) return false;
                 SetPending(run, Utils.GetValue<Dictionary<string, object>>(cur, "next"));
             }
             else if (type == "addCard")
@@ -72,7 +72,7 @@ namespace YgoMaster
         // Validate picks against the enriched openpack node and commit cards. Returns false on
         // invalid input (out-of-range index, wrong count for the mode); cur is untouched in that case.
         static bool CommitOpenPackPicks(RoguelikeRun run, Dictionary<string, object> cur,
-            Dictionary<string, object> data, string dataDirectory)
+            Dictionary<string, object> data, string dataDirectory, Dictionary<string, object> regulation)
         {
             List<object> cards = Utils.GetValue<List<object>>(cur, "_cards");
             int size = Utils.GetValue<int>(cur, "_size");
@@ -97,25 +97,30 @@ namespace YgoMaster
                 {
                     Dictionary<string, object> c = cards[idx] as Dictionary<string, object>;
                     if (c == null) continue;
-                    CommitRewardCard(run, Utils.GetValue<int>(c, "cid"), dataDirectory, autoAdd, minCards, maxMain, maxExtra);
+                    CommitRewardCard(run, Utils.GetValue<int>(c, "cid"), dataDirectory, regulation, autoAdd, minCards, maxMain, maxExtra);
                 }
             }
             return true;
         }
 
-        // Route one reward card into the run: always add to the collection, then add to the deck per
-        // the deck.* rules (below minCards -> mandatory main; under the per-section max -> autoAddToDeck;
-        // at/over the cap -> collection only). Extra deck has no minimum. Shared by openpack picks and
-        // the addCard action.
+        // Route one reward card into the run: always add to the collection (keeping the exact cid/art),
+        // then add to the deck per the deck.* rules. The deck add is also capped at the card's copy
+        // limit — standard 3, reduced by the run regulation's banlist (limited=1, semi=2, forbidden=0).
+        // Copies are counted by CANONICAL card (CARD_Same) so alt arts share the limit. When the limit
+        // (or the per-section size cap) is reached, the card goes to the collection only.
         static void CommitRewardCard(RoguelikeRun run, int cid, string dataDirectory,
-            bool autoAdd, int minCards, int maxMain, int maxExtra)
+            Dictionary<string, object> regulation, bool autoAdd, int minCards, int maxMain, int maxExtra)
         {
             run.AddCard(cid, 1);
             bool isExtra = RoguelikeCardPool.IsCardExtraDeck(dataDirectory, cid);
             int curSize = isExtra ? run.GetExtraDeckSize() : run.GetMainDeckSize();
             int max = isExtra ? maxExtra : maxMain;
+            int canon = RoguelikeCardPool.Canon(dataDirectory, cid);
+            int copyCap = Math.Min(3, RoguelikeCardPool.CopyLimit(regulation, RoguelikeCardPool.RegulationId(dataDirectory), canon));
+            int copiesInDeck = run.CountCanonInDeck(dataDirectory, canon);
             bool toDeck;
-            if (curSize >= max) toDeck = false;                      // cap reached -> collection only
+            if (copiesInDeck >= copyCap) toDeck = false;             // at copy/banlist limit -> collection only
+            else if (curSize >= max) toDeck = false;                 // section cap reached -> collection only
             else if (!isExtra && curSize < minCards) toDeck = true;  // below min -> mandatory
             else toDeck = autoAdd;                                   // between -> opt-in
             if (toDeck) run.AddCidToDeck(dataDirectory, cid);
@@ -224,7 +229,7 @@ namespace YgoMaster
             List<object> applied = new List<object>();
             foreach (int cid in cids)
             {
-                CommitRewardCard(run, cid, dataDirectory, autoAdd, minCards, maxMain, maxExtra);
+                CommitRewardCard(run, cid, dataDirectory, regulation, autoAdd, minCards, maxMain, maxExtra);
                 applied.Add(cid);
             }
             node["_cards"] = applied;

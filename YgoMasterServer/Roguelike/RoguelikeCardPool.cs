@@ -234,6 +234,80 @@ namespace YgoMaster
             return banned;
         }
 
+        // ----- CARD_Same (alt-art lineage) -----
+        // variant cid -> canonical cid, chain-resolved. Read once from DataLE/CardData/MD/CARD_Same.bytes
+        // (array of uint16 trios: variant, canon, slotIdx — 6 bytes each). Mirrors the Settings editor's
+        // CardSameLookup. Cards with no entry are their own canon.
+        static Dictionary<int, int> _sameResolved;
+
+        // Resolve a cid to its canonical card id (alt arts share a canon). Returns the cid itself when
+        // there's no CARD_Same entry. Used by reward routing so copy/banlist limits treat alt arts as
+        // the same card.
+        public static int Canon(string dataDirectory, int cid)
+        {
+            EnsureSame(dataDirectory);
+            int canon;
+            return _sameResolved.TryGetValue(cid, out canon) ? canon : cid;
+        }
+
+        static void EnsureSame(string dataDirectory)
+        {
+            if (_sameResolved != null) return;
+            _sameResolved = new Dictionary<int, int>();
+            Dictionary<int, int> direct = new Dictionary<int, int>();
+            string p = Path.Combine(dataDirectory, "CardData", "MD", "CARD_Same.bytes");
+            if (!File.Exists(p)) { Console.WriteLine("[Roguelike] no CARD_Same.bytes (alt arts won't share a canon)"); return; }
+            try
+            {
+                byte[] data = File.ReadAllBytes(p);
+                int n = data.Length / 6;
+                for (int i = 0; i < n; i++)
+                {
+                    int off = i * 6;
+                    int variant = data[off] | (data[off + 1] << 8);
+                    int canon   = data[off + 2] | (data[off + 3] << 8);
+                    if (!direct.ContainsKey(variant)) direct[variant] = canon;
+                }
+                foreach (KeyValuePair<int, int> kv in direct)
+                {
+                    int cur = kv.Value;
+                    HashSet<int> seen = new HashSet<int> { kv.Key };
+                    int next;
+                    while (direct.TryGetValue(cur, out next))
+                    {
+                        if (next == cur || seen.Contains(cur)) break;
+                        seen.Add(cur);
+                        cur = next;
+                    }
+                    _sameResolved[kv.Key] = cur;
+                }
+            }
+            catch (Exception ex) { Console.WriteLine("[Roguelike] CARD_Same load EX: " + ex.Message); }
+        }
+
+        // Allowed copies of a cid under a regulation's banlist: a0 = 0 (forbidden), a1 = 1 (limited),
+        // a2 = 2 (semi-limited), else 3 (a3 / unlisted). Used by reward routing to cap deck auto-add.
+        public static int CopyLimit(Dictionary<string, object> regulation, int regId, int cid)
+        {
+            Dictionary<string, object> entry = regulation != null
+                ? Utils.GetValue<Dictionary<string, object>>(regulation, regId.ToString()) : null;
+            Dictionary<string, object> avail = entry != null
+                ? Utils.GetValue<Dictionary<string, object>>(entry, "available") : null;
+            if (avail == null) return 3;
+            if (BucketHas(avail, "a0", cid)) return 0;
+            if (BucketHas(avail, "a1", cid)) return 1;
+            if (BucketHas(avail, "a2", cid)) return 2;
+            return 3;
+        }
+
+        static bool BucketHas(Dictionary<string, object> avail, string key, int cid)
+        {
+            List<object> list = Utils.GetValue<List<object>>(avail, key);
+            if (list == null) return false;
+            foreach (object o in list) { int c; if (TryCid(o, out c) && c == cid) return true; }
+            return false;
+        }
+
         static HashSet<int> LoadCardListCids(string dataDirectory)
         {
             return new HashSet<int>(CardListRarity(dataDirectory).Keys);
