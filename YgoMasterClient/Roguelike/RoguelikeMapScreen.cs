@@ -548,17 +548,15 @@ namespace YgoMasterClient
         {
             IntPtr labelGo = GameObject.FindGameObjectByPath(_go, labelPath);
             if (labelGo == IntPtr.Zero) return;
-            // Parent the floater to the full-screen Window node (not the header) so it isn't laid
-            // out by the header group and isn't clipped. Re-anchor it to the overlay center —
-            // otherwise the clone keeps the HUD label's anchors and lands off-screen.
+            // Clone the HUD label into the full-screen Window node so it isn't laid out by the header
+            // group nor clipped. KEEP the clone's pivot/anchors/sizeDelta/alignment (don't reset) so
+            // it's an exact twin of the label — then placing its world position on the label's world
+            // position makes the glyphs overlap precisely on landing.
             IntPtr overlay = WindowRoot();
             if (overlay == IntPtr.Zero) overlay = _go;
             IntPtr clone = UnityObject.Instantiate(labelGo, GameObject.GetTransform(overlay));
             UnityObject.SetName(clone, "RgStatFloater_" + stat);
             IntPtr ct = GameObject.GetTransform(clone);
-            SetVec(ct, _anchorMin, new AssetHelper.Vector2(0.5f, 0.5f));
-            SetVec(ct, _anchorMax, new AssetHelper.Vector2(0.5f, 0.5f));
-            SetVec(ct, _pivot,     new AssetHelper.Vector2(0.5f, 0.5f));
             Transform.SetAsLastSibling(ct); // render on top of the window content
 
             float r, g, b;
@@ -575,15 +573,12 @@ namespace YgoMasterClient
                 TMPro.TMP_Text.SetColor(tmp, r, g, b, 1f);
             }
 
-            // Start near the overlay center (LP left, GOLD right so a simultaneous burst doesn't
-            // overlap), then fly in WORLD space to the HUD label's exact position. Place at the
-            // anchored start first, read its world position, and read the label's world position
-            // as the target — world space avoids the overlay-vs-header coordinate mismatch.
-            float xOff = stat == "lp" ? -130f : 130f;
-            Vector3 startAnchored = new Vector3(xOff, -40f, 0);
-            _anchoredPos3D.GetSetMethod().Invoke(ct, new IntPtr[] { new IntPtr(&startAnchored) });
-            Vector3 startPos = Transform.GetPosition(ct);
+            // Target = the HUD label's exact world position (same pivot as the clone -> exact overlap).
+            // Start = ~250px below it (toward screen center), so the number rises from mid-screen up to
+            // the HUD. LP and GOLD start under their own labels, so a simultaneous burst stays separated.
             Vector3 endPos   = Transform.GetPosition(GameObject.GetTransform(labelGo));
+            Vector3 startPos = new Vector3(endPos.x, endPos.y - 250f, endPos.z);
+            Transform.SetPosition(ct, startPos); // place at start now (avoid a 1-frame flash at the inherited pos)
 
             RoguelikeStatAnim.HudCounter counter = _counters.Find(c => c.LabelPath == labelPath);
             if (counter != null)
