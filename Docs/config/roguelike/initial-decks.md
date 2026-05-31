@@ -14,6 +14,15 @@ editing. Affects new runs only.
 
 ---
 
+## Contents
+
+- [Structure](#structure)
+- [Fields](#fields) — [top level](#top-level) · [per deck](#per-deck)
+- [How offers are chosen](#how-offers-are-chosen)
+- [Notes](#notes)
+
+---
+
 ## Structure
 
 ```jsonc
