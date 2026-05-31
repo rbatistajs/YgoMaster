@@ -726,11 +726,6 @@ namespace YgoMasterClient
             {
                 int tok = _addCardAckToken; _addCardAckToken = -1;
                 RoguelikeApi.ActionRespond(tok);
-                // Destroying the cards ran BindingCardMaterial.OnReleaseResources, which unloads the
-                // shared card illustration — the same resource the node art uses (and which doesn't
-                // hold its own refcount). Re-render so SetNodeArt reloads those textures (else the
-                // matching boss nodes go white).
-                Refresh();
             }
         }
 
@@ -1004,14 +999,20 @@ namespace YgoMasterClient
             _graphicColor.GetSetMethod().Invoke(g, new IntPtr[] { new IntPtr(&c) });
         }
 
+        // Card-illustration paths pinned (refcount bumped) so the game's UnloadUnusedAssets — which
+        // runs on screen changes / after an addCard release — can't evict them and leave a white node.
+        static readonly System.Collections.Generic.HashSet<string> _pinnedArt = new System.Collections.Generic.HashSet<string>();
+
         // Texture for a card_<cid> spec via the game's ResourceManager: custom PNG in ClientData
         // first, else the native MD bundle (has every card). Same path the Goat
-        // SoloChapterCardImage uses.
+        // SoloChapterCardImage uses. Pinned once so it survives screen changes (else white nodes).
         internal static IntPtr ResolveArtTexture(string iconImage)
         {
-            if (iconImage.StartsWith("card_"))
-                return AssetHelper.LoadImmediateAsset("Card/Images/Illust/tcg/" + iconImage.Substring(5));
-            return IntPtr.Zero;
+            if (!iconImage.StartsWith("card_")) return IntPtr.Zero;
+            string path = "Card/Images/Illust/tcg/" + iconImage.Substring(5);
+            IntPtr tex = AssetHelper.LoadImmediateAsset(path);
+            if (tex != IntPtr.Zero && _pinnedArt.Add(path)) AssetHelper.AddAssetRef(path);
+            return tex;
         }
 
         // Find a loaded sprite by name (Solo atlas icons), cached after the first lookup.

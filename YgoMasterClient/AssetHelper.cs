@@ -1988,6 +1988,21 @@ namespace YgoMasterClient
             methodUnload.Invoke(mgr, new IntPtr[] { new IL2String(path).ptr, new IntPtr(&force) });
         }
 
+        // Bump the ResourceManager refcount for an already-loaded path so UnloadUnusedAssets won't
+        // evict it (the texture stays valid across screen changes / other releases). NOT released
+        // automatically — pin each path at most once. Returns false when the resource isn't found.
+        public static bool AddAssetRef(string path)
+        {
+            IntPtr mgr = fieldResourceManagerInstance.GetValue().ptr;
+            IntPtr workPath = IntPtr.Zero;
+            IntPtr res = hookGetResource.Original(mgr, new IL2String(path).ptr, (IntPtr)(&workPath));
+            if (res == IntPtr.Zero) return false;
+            IL2Object rc = methodGetRefCount.Invoke(res);
+            int n = (rc != null ? rc.GetValueRef<int>() : 0) + 1;
+            methodSetRefCount.Invoke(res, new IntPtr[] { new IntPtr(&n) });
+            return true;
+        }
+
         public static byte[] GetBytesDecryptionData(string path)
         {
             IL2Object bytesArrayObj = null;
