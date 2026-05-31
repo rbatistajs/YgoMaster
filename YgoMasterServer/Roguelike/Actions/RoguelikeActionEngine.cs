@@ -56,6 +56,11 @@ namespace YgoMaster
                 if (!CommitOpenPackPicks(run, cur, data, dataDirectory)) return false;
                 SetPending(run, Utils.GetValue<Dictionary<string, object>>(cur, "next"));
             }
+            else if (type == "addCard")
+            {
+                // Cards were already committed in Step; the ack just means "animation done, continue".
+                SetPending(run, Utils.GetValue<Dictionary<string, object>>(cur, "next"));
+            }
             else
             {
                 SetPending(run, null); // unknown -> done
@@ -92,23 +97,28 @@ namespace YgoMaster
                 {
                     Dictionary<string, object> c = cards[idx] as Dictionary<string, object>;
                     if (c == null) continue;
-                    int cid = Utils.GetValue<int>(c, "cid");
-                    run.AddCard(cid, 1);
-                    // Reward routing — same rules for main and extra, just with their own caps.
-                    // Extra deck has no minimum (game allows 0 cards there), so it just respects
-                    // maxExtra + autoAddToDeck. Main respects min (forced slot), max (hard cap),
-                    // and autoAddToDeck (slot in between).
-                    bool isExtra = RoguelikeCardPool.IsCardExtraDeck(dataDirectory, cid);
-                    int curSize = isExtra ? run.GetExtraDeckSize() : run.GetMainDeckSize();
-                    int max  = isExtra ? maxExtra : maxMain;
-                    bool toDeck;
-                    if (curSize >= max) toDeck = false;                      // cap reached -> collection only
-                    else if (!isExtra && curSize < minCards) toDeck = true;  // below min -> mandatory
-                    else toDeck = autoAdd;                                   // between -> opt-in
-                    if (toDeck) run.AddCidToDeck(dataDirectory, cid);
+                    CommitRewardCard(run, Utils.GetValue<int>(c, "cid"), dataDirectory, autoAdd, minCards, maxMain, maxExtra);
                 }
             }
             return true;
+        }
+
+        // Route one reward card into the run: always add to the collection, then add to the deck per
+        // the deck.* rules (below minCards -> mandatory main; under the per-section max -> autoAddToDeck;
+        // at/over the cap -> collection only). Extra deck has no minimum. Shared by openpack picks and
+        // the addCard action.
+        static void CommitRewardCard(RoguelikeRun run, int cid, string dataDirectory,
+            bool autoAdd, int minCards, int maxMain, int maxExtra)
+        {
+            run.AddCard(cid, 1);
+            bool isExtra = RoguelikeCardPool.IsCardExtraDeck(dataDirectory, cid);
+            int curSize = isExtra ? run.GetExtraDeckSize() : run.GetMainDeckSize();
+            int max = isExtra ? maxExtra : maxMain;
+            bool toDeck;
+            if (curSize >= max) toDeck = false;                      // cap reached -> collection only
+            else if (!isExtra && curSize < minCards) toDeck = true;  // below min -> mandatory
+            else toDeck = autoAdd;                                   // between -> opt-in
+            if (toDeck) run.AddCidToDeck(dataDirectory, cid);
         }
 
         // Advance through non-UI nodes; stop on a UI node (options/message/openpack) or when finished.
@@ -141,6 +151,16 @@ namespace YgoMaster
                 {
                     ApplyStatGold(run, node);
                     SetPending(run, Utils.GetValue<Dictionary<string, object>>(node, "next"));
+                }
+                else if (type == "addCard")
+                {
+                    if (node.ContainsKey("_cards")) return; // already applied (re-entry on reload); waiting for the ack
+                    // Clone before stashing runtime data: the action tree is shared (Encounters/
+                    // Actions.json cache), so mutating in-place would pollute later invocations.
+                    Dictionary<string, object> clone = new Dictionary<string, object>(node);
+                    run.PendingAction = clone;
+                    if (!ApplyAddCard(run, clone, dataDirectory)) continue; // 0 cards -> advanced to next
+                    return; // applied; awaits the animation ack
                 }
                 else
                 {
@@ -175,6 +195,46 @@ namespace YgoMaster
             int newGold = run.ApplyGoldDelta(abs, pct);
             Console.WriteLine("[Roguelike] gold action: delta=" + (abs.HasValue ? abs.Value.ToString() : "pct " + pct) +
                 " -> gold=" + newGold);
+        }
+
+        // Add the action's card(s) to the run (collection + deck routing) and stash the resolved cids
+        // on the node ("_cards") for the wire projection — the client plays the add-card animation and
+        // acks when it finishes (Respond just advances; the cards are already applied here). Returns
+        // false (and advances to `next`) when the action names no cards.
+        static bool ApplyAddCard(RoguelikeRun run, Dictionary<string, object> node, string dataDirectory)
+        {
+            List<int> cids = ReadCardCids(node);
+            if (cids.Count == 0)
+            {
+                Console.WriteLine("[Roguelike] addCard: no cids; advancing");
+                SetPending(run, Utils.GetValue<Dictionary<string, object>>(node, "next"));
+                return false;
+            }
+            Dictionary<string, object> settings = RoguelikeSettings.Load(dataDirectory);
+            bool autoAdd = RoguelikeSettings.DeckAutoAdd(settings);
+            int minCards = RoguelikeSettings.DeckMinCards(settings);
+            int maxMain  = RoguelikeSettings.DeckMaxMainCards(settings);
+            int maxExtra = RoguelikeSettings.DeckMaxExtraCards(settings);
+            List<object> applied = new List<object>();
+            foreach (int cid in cids)
+            {
+                CommitRewardCard(run, cid, dataDirectory, autoAdd, minCards, maxMain, maxExtra);
+                applied.Add(cid);
+            }
+            node["_cards"] = applied;
+            Console.WriteLine("[Roguelike] addCard: added " + applied.Count + " card(s)");
+            return true;
+        }
+
+        // Read cids from an addCard node: `cid` (single int) and/or `cards` (array of ints).
+        static List<int> ReadCardCids(Dictionary<string, object> node)
+        {
+            List<int> result = new List<int>();
+            object single;
+            if (node.TryGetValue("cid", out single)) { try { result.Add(Convert.ToInt32(single)); } catch { } }
+            List<object> arr = Utils.GetValue<List<object>>(node, "cards");
+            if (arr != null) foreach (object o in arr) { try { result.Add(Convert.ToInt32(o)); } catch { } }
+            return result;
         }
 
         // Roll cards for this openpack node and stash them on the node ("_cards"/"_size"/"_mode"/"_labels").
@@ -377,6 +437,13 @@ namespace YgoMaster
                 data["pickMin"] = Utils.GetValue<int>(cur, "_pickMin");
                 data["size"]    = Utils.GetValue<int>(cur, "_size");
                 data["labels"] = Utils.GetValue<Dictionary<string, object>>(cur, "_labels") ?? new Dictionary<string, object>();
+            }
+            else if (type == "addCard")
+            {
+                // Cards already applied in Step; expose the cids so the client plays the fly animation
+                // and acks when it's done. Skip projection if nothing was applied (0-card advanced).
+                if (!cur.ContainsKey("_cards")) return null;
+                data["cards"] = Utils.GetValue<List<object>>(cur, "_cards") ?? new List<object>();
             }
             return new Dictionary<string, object>
             {

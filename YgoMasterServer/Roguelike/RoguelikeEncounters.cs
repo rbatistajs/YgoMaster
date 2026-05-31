@@ -267,6 +267,22 @@ namespace YgoMaster
                     if (nxt != null) ValidateActionNode(nxt);
                     return;
                 }
+                case "addCard":
+                {
+                    bool hasCid = node.ContainsKey("cid");
+                    bool hasCards = node.ContainsKey("cards");
+                    if (!hasCid && !hasCards) throw new Exception("addCard: 'cid' or 'cards' required");
+                    if (hasCid) { try { Convert.ToInt32(node["cid"]); } catch { throw new Exception("addCard: 'cid' must be int"); } }
+                    if (hasCards)
+                    {
+                        List<object> arr = Utils.GetValue<List<object>>(node, "cards");
+                        if (arr == null) throw new Exception("addCard: 'cards' must be an array");
+                        foreach (object o in arr) { try { Convert.ToInt32(o); } catch { throw new Exception("addCard: 'cards' entries must be ints"); } }
+                    }
+                    Dictionary<string, object> nxtc = Utils.GetValue<Dictionary<string, object>>(node, "next");
+                    if (nxtc != null) ValidateActionNode(nxtc);
+                    return;
+                }
                 case "lp":
                 case "gold":
                 {
