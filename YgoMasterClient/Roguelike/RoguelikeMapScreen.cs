@@ -651,6 +651,7 @@ namespace YgoMasterClient
                 ? Transform.GetPosition(GameObject.GetTransform(btn))
                 : new Vector3(0, 0, 0);
             _addCardAckToken = token;
+            int firstIdx = _cardFlights.Count;
             for (int i = 0; i < cids.Length; i++)
             {
                 IntPtr card = CreateCardImage(overlay, cids[i]);
@@ -658,7 +659,6 @@ namespace YgoMasterClient
                 float xOff = (i - (cids.Length - 1) / 2f) * 70f; // spread when several at once
                 PlaceNode(card, xOff, 0, new AssetHelper.Vector2(CardW, CardH)); // overlay-center + xOff
                 Vector3 startPos = Transform.GetPosition(GameObject.GetTransform(card));
-                Transform.SetAsLastSibling(GameObject.GetTransform(card));
                 // Nose-toward-target tilt (jet feel): the card's +Y points along the flight path.
                 Vector3 dir = new Vector3(endPos.x - startPos.x, endPos.y - startPos.y, 0);
                 float angle = (float)(Math.Atan2(dir.y, dir.x) * 180.0 / Math.PI) - 90f;
@@ -669,6 +669,10 @@ namespace YgoMasterClient
                     T = -(CardHoldFrac + i * CardStaggerFrac),
                 });
             }
+            // Stack so the FIRST card renders on top: in a UI canvas later siblings draw above, so
+            // push the cards to the end back-to-front (last card first, first card last = topmost).
+            for (int i = _cardFlights.Count - 1; i >= firstIdx; i--)
+                Transform.SetAsLastSibling(GameObject.GetTransform(_cardFlights[i].Go));
             if (_cardFlights.Count == 0) { _addCardAckToken = -1; RoguelikeApi.ActionRespond(token); } // nothing spawned
         }
 
