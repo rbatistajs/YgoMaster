@@ -252,6 +252,21 @@ An option whose `next` is `null` or missing ends the tree.
 
 ### `openpack`
 
+**Concepts — `pool`, `pull`, `pulls`, `packs`** (they nest, and are easy to mix up):
+
+- **`pool`** — *where* cards come from: the eligibility + weight spec (`random` type, `rarity` /
+  `rarities`, `rarityRates`, numeric filters). Think "the bag of eligible cards". Not plural of
+  anything — same fields as the modifiers' [random spec](#modifiers-starting-board).
+- **`pull`** — *one draw*: take `count` cards from **one** `pool`, with an optional `chance` of
+  happening. A pull **contains** a pool.
+- **`pulls`** — the *list of draws*. Each entry is a `pull` with its own `pool` + `count`, so a
+  single reward can mix sources (e.g. 6 monsters + 1 spell + a 50%-chance UR).
+- **`packs`** — how many times the whole `pulls` list is rolled (default 1).
+
+Nesting: **`packs` → `pulls` → each `pull` → one `pool`**. Total cards = `packs × sum(pulls[].count)`.
+(`addCard` reuses the exact same `pulls`/`pool`, plus a `pool` + `count` top-level shorthand for a
+single pull — see [`addCard`](#addcard).)
+
 ```jsonc
 {
   "type": "openpack",
