@@ -159,7 +159,7 @@ namespace YgoMaster
                     // Actions.json cache), so mutating in-place would pollute later invocations.
                     Dictionary<string, object> clone = new Dictionary<string, object>(node);
                     run.PendingAction = clone;
-                    if (!ApplyAddCard(run, clone, dataDirectory)) continue; // 0 cards -> advanced to next
+                    if (!ApplyAddCard(run, clone, dataDirectory, regulation)) continue; // 0 cards -> advanced to next
                     return; // applied; awaits the animation ack
                 }
                 else
@@ -201,9 +201,15 @@ namespace YgoMaster
         // on the node ("_cards") for the wire projection — the client plays the add-card animation and
         // acks when it finishes (Respond just advances; the cards are already applied here). Returns
         // false (and advances to `next`) when the action names no cards.
-        static bool ApplyAddCard(RoguelikeRun run, Dictionary<string, object> node, string dataDirectory)
+        static bool ApplyAddCard(RoguelikeRun run, Dictionary<string, object> node, string dataDirectory,
+            Dictionary<string, object> regulation)
         {
             List<int> cids = ReadCardCids(node);
+            // Random roll (same pool/pulls/pity machinery as openpack) when the action specifies a
+            // pool instead of (or in addition to) explicit cids. All rolled cards are added.
+            if (node.ContainsKey("pulls") || node.ContainsKey("pool"))
+                foreach (Dictionary<string, object> c in RollPackCards(run, node, dataDirectory, regulation))
+                    cids.Add(Utils.GetValue<int>(c, "cid"));
             if (cids.Count == 0)
             {
                 Console.WriteLine("[Roguelike] addCard: no cids; advancing");
@@ -243,7 +249,6 @@ namespace YgoMaster
         static bool RollOpenPack(RoguelikeRun run, Dictionary<string, object> node,
             string dataDirectory, Dictionary<string, object> regulation)
         {
-            int packs = Utils.GetValue<int>(node, "packs", 1);
             // pick:
             //   absent or 0   -> keep mode (pick everything, no selection UI)
             //   N (int > 0)   -> exact-pick mode (min=max=N)
@@ -251,76 +256,10 @@ namespace YgoMaster
             //                    or 0 if both missing. max is clamped to pack size at stage time.
             int pickMin, pickMax;
             ParsePick(node, out pickMin, out pickMax);
-            List<object> pulls = Utils.GetValue<List<object>>(node, "pulls");
-            Console.WriteLine("[Roguelike] openpack enter: packs=" + packs + " pick=" + pickMin + "-" + pickMax +
-                " pulls=" + (pulls != null ? pulls.Count : 0));
-
-            // pity: action.pity = false disables; merge global+asc+action
-            object pityRaw;
-            bool pityEnabled = true;
-            Dictionary<string, object> actionPity = null;
-            if (node.TryGetValue("pity", out pityRaw))
-            {
-                if (pityRaw is bool && !(bool)pityRaw) pityEnabled = false;
-                else actionPity = pityRaw as Dictionary<string, object>;
-            }
-            Dictionary<int, RoguelikeCardPool.PityConfig> pityCfg =
-                pityEnabled ? MergePity(RoguelikeCardPool.Pity(dataDirectory, run.Ascension), actionPity) : null;
-
-            if (run.Pity == null) run.Pity = new Dictionary<string, int>();
-
-            Random rng = new Random(unchecked((int)(run.Seed ^ ((long)run.ActionToken * 2654435761L)))); // Knuth multiplicative hash
-            HashSet<int> anyPool = RoguelikeCardPool.AnyPool(dataDirectory, regulation, run.Ascension);
-            Console.WriteLine("[Roguelike] openpack anyPool size=" + (anyPool != null ? anyPool.Count : -1));
-
-            List<Dictionary<string, object>> allCards = new List<Dictionary<string, object>>();
-            for (int packIdx = 0; packIdx < packs; packIdx++)
-            {
-                HashSet<int> usedPack = new HashSet<int>();
-                List<RoguelikeCardPool.DrawResult> packDraws = new List<RoguelikeCardPool.DrawResult>();
-                if (pulls != null)
-                    foreach (object pullObj in pulls)
-                    {
-                        Dictionary<string, object> pull = pullObj as Dictionary<string, object>;
-                        if (pull == null) continue;
-                        double chance = Utils.GetValue<double>(pull, "chance", 1.0);
-                        if (chance < 1.0 && rng.NextDouble() >= chance) continue;
-                        int count = Utils.GetValue<int>(pull, "count", 0);
-                        Dictionary<string, object> pool = Utils.GetValue<Dictionary<string, object>>(pull, "pool");
-                        string source = pool != null ? Utils.GetValue<string>(pool, "source", "any") : "any";
-                        // v1: openpack only supports source=any. Other sources log and fall back to any.
-                        if (source != "any")
-                            Console.WriteLine("[Roguelike] openpack pool.source '" + source + "' not supported in v1; falling back to 'any'");
-                        bool weighted = true;
-                        HashSet<int> universe = anyPool;
-
-                        // rarityRates: action override + pity bonus, applied on top of layered (global+asc) rates
-                        Dictionary<int, double> rrEffective = MergeRarityRatesWithPity(
-                            RoguelikeCardPool.LayeredRarityRates(dataDirectory, run.Ascension),
-                            pool != null ? Utils.GetValue<Dictionary<string, object>>(pool, "rarityRates") : null,
-                            pityCfg, run.Pity);
-
-                        List<RoguelikeCardPool.DrawResult> drawn = RoguelikeCardPool.DrawN(
-                            dataDirectory, universe, pool, count, rng, run.Ascension,
-                            usedPack, rrEffective, weighted);
-                        Console.WriteLine("[Roguelike] DrawN: requested=" + count + " got=" + drawn.Count + " (universe=" + universe.Count + ")");
-                        packDraws.AddRange(drawn);
-                    }
-                foreach (RoguelikeCardPool.DrawResult d in packDraws)
-                {
-                    allCards.Add(new Dictionary<string, object>
-                    {
-                        { "cid", d.Cid }, { "rarity", d.Rarity },
-                        { "new", d.IsNew }, { "premium", d.PremiumType },
-                        { "packIdx", packIdx }
-                    });
-                }
-                // pity tick after the pack (counters accumulate across packs within this openpack node)
-                if (pityCfg != null) UpdatePity(run.Pity, packDraws, pityCfg);
-            }
+            List<Dictionary<string, object>> allCards = RollPackCards(run, node, dataDirectory, regulation);
 
             int size = allCards.Count;
-            Console.WriteLine("[Roguelike] openpack staged: packs=" + packs + " size=" + size + " pick=" + pickMin + "-" + pickMax + " token=" + run.ActionToken);
+            Console.WriteLine("[Roguelike] openpack staged: size=" + size + " pick=" + pickMin + "-" + pickMax + " token=" + run.ActionToken);
             if (size == 0)
             {
                 // No cards drawn (empty universe / over-filtered pool / weights all zero).
@@ -359,6 +298,78 @@ namespace YgoMaster
             node["_pickMax"] = pickMax;
             node["_labels"] = BuildOpenPackLabels(node, pickMin, pickMax, size);
             return true;
+        }
+
+        // Draw cards from a node's `packs` × `pulls` spec (with pity + rarity rates). Shared by
+        // openpack (which stages a pick afterward) and addCard (which commits all). Returns the
+        // rolled card dicts {cid, rarity, new, premium, packIdx}. Accepts a `pool` + `count`
+        // shorthand (one implicit pull) in addition to an explicit `pulls` array.
+        static List<Dictionary<string, object>> RollPackCards(RoguelikeRun run, Dictionary<string, object> node,
+            string dataDirectory, Dictionary<string, object> regulation)
+        {
+            int packs = Utils.GetValue<int>(node, "packs", 1);
+            List<object> pulls = Utils.GetValue<List<object>>(node, "pulls");
+            if (pulls == null)
+            {
+                Dictionary<string, object> pool0 = Utils.GetValue<Dictionary<string, object>>(node, "pool");
+                if (pool0 != null)
+                    pulls = new List<object> { new Dictionary<string, object> {
+                        { "count", Utils.GetValue<int>(node, "count", 1) }, { "pool", pool0 } } };
+            }
+            Console.WriteLine("[Roguelike] rollpack: packs=" + packs + " pulls=" + (pulls != null ? pulls.Count : 0));
+
+            // pity: node.pity = false disables; merge global+asc+action
+            object pityRaw;
+            bool pityEnabled = true;
+            Dictionary<string, object> actionPity = null;
+            if (node.TryGetValue("pity", out pityRaw))
+            {
+                if (pityRaw is bool && !(bool)pityRaw) pityEnabled = false;
+                else actionPity = pityRaw as Dictionary<string, object>;
+            }
+            Dictionary<int, RoguelikeCardPool.PityConfig> pityCfg =
+                pityEnabled ? MergePity(RoguelikeCardPool.Pity(dataDirectory, run.Ascension), actionPity) : null;
+            if (run.Pity == null) run.Pity = new Dictionary<string, int>();
+
+            Random rng = new Random(unchecked((int)(run.Seed ^ ((long)run.ActionToken * 2654435761L)))); // Knuth multiplicative hash
+            HashSet<int> anyPool = RoguelikeCardPool.AnyPool(dataDirectory, regulation, run.Ascension);
+
+            List<Dictionary<string, object>> allCards = new List<Dictionary<string, object>>();
+            for (int packIdx = 0; packIdx < packs; packIdx++)
+            {
+                HashSet<int> usedPack = new HashSet<int>();
+                List<RoguelikeCardPool.DrawResult> packDraws = new List<RoguelikeCardPool.DrawResult>();
+                if (pulls != null)
+                    foreach (object pullObj in pulls)
+                    {
+                        Dictionary<string, object> pull = pullObj as Dictionary<string, object>;
+                        if (pull == null) continue;
+                        double chance = Utils.GetValue<double>(pull, "chance", 1.0);
+                        if (chance < 1.0 && rng.NextDouble() >= chance) continue;
+                        int count = Utils.GetValue<int>(pull, "count", 0);
+                        Dictionary<string, object> pool = Utils.GetValue<Dictionary<string, object>>(pull, "pool");
+                        string source = pool != null ? Utils.GetValue<string>(pool, "source", "any") : "any";
+                        if (source != "any")
+                            Console.WriteLine("[Roguelike] pool.source '" + source + "' not supported; falling back to 'any'");
+                        // rarityRates: action override + pity bonus, on top of layered (global+asc) rates
+                        Dictionary<int, double> rrEffective = MergeRarityRatesWithPity(
+                            RoguelikeCardPool.LayeredRarityRates(dataDirectory, run.Ascension),
+                            pool != null ? Utils.GetValue<Dictionary<string, object>>(pool, "rarityRates") : null,
+                            pityCfg, run.Pity);
+                        List<RoguelikeCardPool.DrawResult> drawn = RoguelikeCardPool.DrawN(
+                            dataDirectory, anyPool, pool, count, rng, run.Ascension, usedPack, rrEffective, true);
+                        Console.WriteLine("[Roguelike] DrawN: requested=" + count + " got=" + drawn.Count);
+                        packDraws.AddRange(drawn);
+                    }
+                foreach (RoguelikeCardPool.DrawResult d in packDraws)
+                    allCards.Add(new Dictionary<string, object>
+                    {
+                        { "cid", d.Cid }, { "rarity", d.Rarity },
+                        { "new", d.IsNew }, { "premium", d.PremiumType }, { "packIdx", packIdx }
+                    });
+                if (pityCfg != null) UpdatePity(run.Pity, packDraws, pityCfg);
+            }
+            return allCards;
         }
 
         // pick:

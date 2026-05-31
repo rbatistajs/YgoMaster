@@ -271,7 +271,10 @@ namespace YgoMaster
                 {
                     bool hasCid = node.ContainsKey("cid");
                     bool hasCards = node.ContainsKey("cards");
-                    if (!hasCid && !hasCards) throw new Exception("addCard: 'cid' or 'cards' required");
+                    bool hasPulls = node.ContainsKey("pulls");
+                    bool hasPool = node.ContainsKey("pool");
+                    if (!hasCid && !hasCards && !hasPulls && !hasPool)
+                        throw new Exception("addCard: one of 'cid' / 'cards' / 'pulls' / 'pool' required");
                     if (hasCid) { try { Convert.ToInt32(node["cid"]); } catch { throw new Exception("addCard: 'cid' must be int"); } }
                     if (hasCards)
                     {
@@ -279,6 +282,23 @@ namespace YgoMaster
                         if (arr == null) throw new Exception("addCard: 'cards' must be an array");
                         foreach (object o in arr) { try { Convert.ToInt32(o); } catch { throw new Exception("addCard: 'cards' entries must be ints"); } }
                     }
+                    // Random roll (openpack-style). `pulls` is an array of {count, pool}; `pool` + `count`
+                    // is the single-pull shorthand. Validate each pool the same way openpack does.
+                    if (hasPulls)
+                    {
+                        List<object> pulls = Utils.GetValue<List<object>>(node, "pulls");
+                        if (pulls == null) throw new Exception("addCard: 'pulls' must be an array");
+                        foreach (object pullObj in pulls)
+                        {
+                            Dictionary<string, object> pull = pullObj as Dictionary<string, object>;
+                            if (pull == null) throw new Exception("addCard: each pull must be an object");
+                            if (Utils.GetValue<int>(pull, "count", 0) < 1) throw new Exception("addCard: pull.count must be >= 1");
+                            Dictionary<string, object> pl = Utils.GetValue<Dictionary<string, object>>(pull, "pool");
+                            if (pl == null) throw new Exception("addCard: pull.pool required");
+                            ValidatePackPool(pl);
+                        }
+                    }
+                    if (hasPool) ValidatePackPool(Utils.GetValue<Dictionary<string, object>>(node, "pool"));
                     Dictionary<string, object> nxtc = Utils.GetValue<Dictionary<string, object>>(node, "next");
                     if (nxtc != null) ValidateActionNode(nxtc);
                     return;

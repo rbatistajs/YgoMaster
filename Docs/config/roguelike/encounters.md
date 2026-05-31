@@ -379,17 +379,32 @@ cap → collection only). The client plays an animation — each card renders fu
 the center of the screen to the deck button — then the action advances to `next`.
 
 ```jsonc
-{ "type": "addCard", "cid": 5381 }                  // single card
-{ "type": "addCard", "cards": [5381, 5655, 4426] }  // several at once
+{ "type": "addCard", "cid": 5381 }                  // single explicit card
+{ "type": "addCard", "cards": [5381, 5655, 4426] }  // several explicit cards
+
+// Random — same pool/pulls/pity machinery as openpack, but no pick UI (all rolled cards are added):
+{ "type": "addCard", "pool": { "source": "any", "random": "monster" } }            // 1 random monster
+{ "type": "addCard", "count": 3, "pool": { "random": "monster", "rarity": "UR" } } // 3 random URs
+{ "type": "addCard", "pulls": [                                                     // full openpack-style
+  { "count": 1, "pool": { "random": "monster" } },
+  { "count": 1, "pool": { "random": "spell" } }
+] }
 ```
 
 | Field | Required | Notes |
 |---|---|---|
-| `cid` | one of | Single card id. |
-| `cards` | one of | Array of card ids. Combine with `cid` if you like — both are added. |
+| `cid` | one of | Single explicit card id. |
+| `cards` | one of | Array of explicit card ids. |
+| `pool` | one of | Random spec (same as an openpack pull's `pool`). Rolls `count` cards (default 1). |
+| `count` | no | How many to roll from `pool` (single-pull shorthand). Default 1. |
+| `pulls` | one of | Array of `{ count, pool, chance }` — full openpack-style roll. |
+| `pity` | no | Same as openpack: `false` to disable, or per-rarity overrides. Applies to the random roll. |
 | `next` | no | Chain another action after the animation finishes. |
 
-At least one of `cid` / `cards` is required. Cids should exist in `CardList.json`. Chaining example:
+At least one of `cid` / `cards` / `pool` / `pulls` is required. Explicit cids and a random roll can
+be combined (both are added). Random cards are drawn from the run's `any` pool (regulation + ascension
+filtered), honoring `rarityRates`/`rarity`/`rarities` and pity — exactly like `openpack`. Chaining
+example:
 
 ```json
 "action": {
