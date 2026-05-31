@@ -228,9 +228,11 @@ namespace YgoMaster
         // AI strength (-100..100; default 100 = max). Fallback for encounters without `cpuRate`.
         public static int CpuRate(Dictionary<string, object> s) => Utils.GetValue<int>(s, "cpuRate", 100);
 
-        // AI behavior flag (DuelCpuParam name: None/Def/Fool/Light/MyTurnOnly/AttackOnly/Simple;
-        // null = None). Fallback for encounters without `cpuFlag`.
-        public static string CpuFlag(Dictionary<string, object> s) => Utils.GetValue<string>(s, "cpuFlag", null);
+        // AI behavior flag (DuelCpuParam name: None/Def/Fool/Light/MyTurnOnly/AttackOnly/Simple).
+        // Fallback for encounters without `cpuFlag`. Defaults to "None" explicitly — a null/absent
+        // cpuflag makes the native EngineInitializerByServer fall back to its own default (Light),
+        // so we send "None" to actually get plain AI.
+        public static string CpuFlag(Dictionary<string, object> s) => Utils.GetValue<string>(s, "cpuFlag", "None");
 
         // ----- modifiers -----
 
