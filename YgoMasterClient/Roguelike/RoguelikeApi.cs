@@ -292,6 +292,21 @@ namespace YgoMasterClient
                 }
             }
             public class PackLabels { public string TitleKeep; public string TitlePick; public string Confirm; }
+
+            // addCard accessor — cids the server already applied; the client plays the fly
+            // animation (center -> deck button) then acks to advance the action.
+            public int[] Cards
+            {
+                get
+                {
+                    if (Data == null) return new int[0];
+                    List<object> arr = Data.ContainsKey("cards") ? Data["cards"] as List<object> : null;
+                    if (arr == null) return new int[0];
+                    int[] r = new int[arr.Count];
+                    for (int i = 0; i < arr.Count; i++) { try { r[i] = Convert.ToInt32(arr[i]); } catch { } }
+                    return r;
+                }
+            }
         }
 
         static string _lastActionJson; // diag dedup so the per-frame log doesn't spam

@@ -27,7 +27,7 @@ layer on top of it.
 - [Gating (act / floor / ascension)](#gating-act--floor--ascension)
 - [Overrides (LP, reward, first player)](#overrides-lp-reward-first-player)
 - [Modifiers (starting board)](#modifiers-starting-board)
-- [Actions (options / message / openpack)](#actions-options--message--openpack) — [stat actions (`lp` / `gold`)](#lp--gold-stat-actions)
+- [Actions (options / message / openpack)](#actions-options--message--openpack) — [stat actions (`lp` / `gold`)](#lp--gold-stat-actions) · [`addCard`](#addcard)
 - [Actions.json and type defaults](#actionsjson-and-type-defaults)
 - [Defaults & relationship to Settings.json](#defaults--relationship-to-settingsjson)
 - [Strict coverage — avoiding soft-locks](#strict-coverage--avoiding-soft-locks)
@@ -231,6 +231,7 @@ An encounter's `action` is a tree of action nodes the server walks after the enc
 | `openpack` | Open one or more packs of cards with weighted draws and pity, then either keep all or pick X of N. Adds the resolved cards to the run's pool / deck, then advances to `next`. |
 | `lp` | Apply an LP delta to the run (heal/damage). No prompt — fires and advances to `next`. LP ≤ 0 is game over. See [stat actions](#lp--gold-stat-actions). |
 | `gold` | Apply a gold delta to the run (gain/cost). No prompt — fires and advances to `next`. See [stat actions](#lp--gold-stat-actions). |
+| `addCard` | Add specific card(s) to the run (collection + deck routing), with a fly-to-deck animation. See [`addCard`](#addcard). |
 
 ```json
 "action": {
@@ -368,6 +369,36 @@ moved"):
 When multiple stat actions fire in one chain without a prompt in between (e.g. `lp → gold → lp`),
 the HUD consolidates them into one animation per stat (it diffs the run state, so two `lp` steps
 show as a single combined delta).
+
+### `addCard`
+
+Add one or more **specific** cards to the run (unlike `openpack`, which rolls from a pool). The
+cards are added to the collection and routed into the deck by the same `deck.*` rules as openpack
+picks (below `minCards` → mandatory main; under the per-section max → `autoAddToDeck`; at/over the
+cap → collection only). The client plays an animation — each card renders full-art and flies from
+the center of the screen to the deck button — then the action advances to `next`.
+
+```jsonc
+{ "type": "addCard", "cid": 5381 }                  // single card
+{ "type": "addCard", "cards": [5381, 5655, 4426] }  // several at once
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `cid` | one of | Single card id. |
+| `cards` | one of | Array of card ids. Combine with `cid` if you like — both are added. |
+| `next` | no | Chain another action after the animation finishes. |
+
+At least one of `cid` / `cards` is required. Cids should exist in `CardList.json`. Chaining example:
+
+```json
+"action": {
+  "type": "message", "title": "Recompensa", "message": "Você recebe uma carta!",
+  "next": { "type": "addCard", "cid": 6101,
+    "next": { "type": "message", "title": "Pronto", "message": "Carta adicionada ao deck." }
+  }
+}
+```
 
 ---
 

@@ -86,6 +86,17 @@ namespace YgoMasterClient
         static bool _runWasActive;
         static bool _pendingDefeat;
 
+        // addCard animation: full cards (native BindingCardMaterial on a RawImage) fly from center to
+        // the deck button, then fade. When all land, the action is acked (the cards were already
+        // applied server-side). _bindingMethod = BindingCardMaterial.Binding(RawImage, cid, rareType).
+        static IL2Method _bindingMethod;
+        const float CardFlightDuration = 0.9f;
+        const float CardW = 200f, CardH = 292f;   // ~card aspect (tune)
+        class CardFlight { public IntPtr Go; public Vector3 StartPos, EndPos; public float T; }
+        static readonly System.Collections.Generic.List<CardFlight> _cardFlights =
+            new System.Collections.Generic.List<CardFlight>();
+        static int _addCardAckToken = -1;   // ack this action token once all flights finish
+
         // ExtendedScrollRect.Start()/Initialize() resets dragScrollEnabled to false after our
         // OnCreatedView set, so re-assert it post-Start. Global hook (one per method); only our
         // instance is forced.
@@ -189,6 +200,9 @@ namespace YgoMasterClient
                 _activeInHierarchy = core.GetClass("GameObject", "UnityEngine").GetProperty("activeInHierarchy").GetGetMethod();
                 _objAlive = core.GetClass("Object", "UnityEngine").GetMethod("op_Implicit", x => x.GetParameters().Length == 1);
                 _tmpType = CastUtils.IL2Typeof("ExtendedTextMeshProUGUI", "YgomSystem.YGomTMPro", "Assembly-CSharp");
+                IL2Class bcm = Assembler.GetAssembly("Assembly-CSharp").GetClass("BindingCardMaterial", "YgomGame.Menu.Common");
+                _bindingMethod = bcm != null ? bcm.GetMethod("Binding") : null;
+                if (_bindingMethod == null) Console.WriteLine("[Roguelike] BindingCardMaterial.Binding not found (addCard art disabled)");
                 _ready = true;
             }
             catch (Exception ex) { Console.WriteLine("[Roguelike] mapscreen init EX: " + ex); }
@@ -275,6 +289,7 @@ namespace YgoMasterClient
                 float dt = NextAnimDt();
                 RoguelikeStatAnim.TickFloaters(_floaters, dt, _tmpType);
                 RoguelikeStatAnim.TickCounters(_counters, dt, SetTmpText);
+                TickCardFlights(dt);
             }
             // Game over: the run died (active->false) without winning. Latch the edge, then show the
             // defeat dialog once the LP->0 animation finished (floaters/counters drained) and the map
@@ -617,6 +632,85 @@ namespace YgoMasterClient
         {
             foreach (RoguelikeStatAnim.HudCounter c in _counters) if (c.LabelPath == labelPath) return true;
             return false;
+        }
+
+        // ---- addCard animation (full card flies center -> deck button) ----
+
+        // Called by the action driver on an addCard prompt: spawn a flying card per cid, then ack the
+        // token once they all land (the cards are already applied server-side; the ack just advances).
+        public static void PlayAddCard(int[] cids, int token)
+        {
+            if (cids == null || cids.Length == 0 || _go == IntPtr.Zero) { RoguelikeApi.ActionRespond(token); return; }
+            IntPtr overlay = WindowRoot();
+            if (overlay == IntPtr.Zero) overlay = _go;
+            // Target = the deck button (opens the run deck). Fall back to overlay top-center.
+            IntPtr btn = GameObject.FindGameObjectByPath(_go, HeaderGroup + ".ButtonPickupCard");
+            Vector3 endPos = btn != IntPtr.Zero
+                ? Transform.GetPosition(GameObject.GetTransform(btn))
+                : new Vector3(0, 0, 0);
+            _addCardAckToken = token;
+            for (int i = 0; i < cids.Length; i++)
+            {
+                IntPtr card = CreateCardImage(overlay, cids[i]);
+                if (card == IntPtr.Zero) continue;
+                float xOff = (i - (cids.Length - 1) / 2f) * 70f; // spread when several at once
+                PlaceNode(card, xOff, 0, new AssetHelper.Vector2(CardW, CardH)); // overlay-center + xOff
+                Vector3 startPos = Transform.GetPosition(GameObject.GetTransform(card));
+                Transform.SetAsLastSibling(GameObject.GetTransform(card));
+                _cardFlights.Add(new CardFlight { Go = card, StartPos = startPos, EndPos = endPos, T = -i * 0.18f });
+            }
+            if (_cardFlights.Count == 0) { _addCardAckToken = -1; RoguelikeApi.ActionRespond(token); } // nothing spawned
+        }
+
+        // Build a RawImage GameObject bound to the full card art via the native BindingCardMaterial.
+        static IntPtr CreateCardImage(IntPtr parent, int cid)
+        {
+            if (_bindingMethod == null) return IntPtr.Zero;
+            IntPtr go = GameObject.New();
+            UnityObject.SetName(go, "RgAddCard_" + cid);
+            GameObject.AddComponent(go, _rectType);
+            IntPtr raw = GameObject.AddComponent(go, _rawImageType);
+            Transform.SetParent(GameObject.GetTransform(go), GameObject.GetTransform(parent));
+            int cidL = cid, rareL = 0; // 0 = normal treatment
+            try { _bindingMethod.Invoke(IntPtr.Zero, new IntPtr[] { raw, new IntPtr(&cidL), new IntPtr(&rareL) }); }
+            catch (Exception ex) { Console.WriteLine("[Roguelike] BindingCardMaterial.Binding EX: " + ex); }
+            return go;
+        }
+
+        // Advance card flights: ease world position center -> deck button, shrink, fade on arrival.
+        // When the last one lands, ack the pending addCard token.
+        static void TickCardFlights(float dt)
+        {
+            if (_cardFlights.Count == 0) return;
+            for (int i = _cardFlights.Count - 1; i >= 0; i--)
+            {
+                CardFlight f = _cardFlights[i];
+                f.T += dt / CardFlightDuration;
+                bool done = f.T >= 1f;
+                float t = f.T < 0 ? 0 : (done ? 1f : f.T);
+                float e = RoguelikeStatAnim.EaseOutCubic(t);
+                IntPtr ct = GameObject.GetTransform(f.Go);
+                Vector3 pos = new Vector3(
+                    RoguelikeStatAnim.Lerp(f.StartPos.x, f.EndPos.x, e),
+                    RoguelikeStatAnim.Lerp(f.StartPos.y, f.EndPos.y, e),
+                    RoguelikeStatAnim.Lerp(f.StartPos.z, f.EndPos.z, e));
+                Transform.SetPosition(ct, pos);
+                float scale = RoguelikeStatAnim.Lerp(1.0f, 0.18f, e); // shrink into the button
+                Transform.SetLocalScale(ct, new Vector3(scale, scale, scale));
+                IntPtr g = GameObject.GetComponent(f.Go, _graphicType);
+                if (g != IntPtr.Zero)
+                {
+                    float alpha = t < 0.65f ? 1f : 1f - (t - 0.65f) / 0.35f; // opaque in flight, fade at the button
+                    Col c = new Col { r = 1f, g = 1f, b = 1f, a = alpha };
+                    _graphicColor.GetSetMethod().Invoke(g, new IntPtr[] { new IntPtr(&c) });
+                }
+                if (done) { UnityObject.Destroy(f.Go); _cardFlights.RemoveAt(i); }
+            }
+            if (_cardFlights.Count == 0 && _addCardAckToken >= 0)
+            {
+                int tok = _addCardAckToken; _addCardAckToken = -1;
+                RoguelikeApi.ActionRespond(tok);
+            }
         }
 
         // Keep the header pickup button visible and rewire its click to open the run deck editor.

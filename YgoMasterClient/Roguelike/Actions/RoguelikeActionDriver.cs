@@ -50,6 +50,12 @@ namespace YgoMasterClient
                         new Dictionary<string, object> { { "ForwardResultArgs", null } }));
                     YgomSystem.UI.ViewControllerManager.PushChildViewControllerArgs(manager, "CardPack/CardPackOpen", args);
                 }
+                else if (p.Type == "addCard")
+                {
+                    // Cards already applied server-side; play the fly animation, which acks the token
+                    // when the last card lands (advancing to the next action).
+                    RoguelikeMapScreen.PlayAddCard(p.Cards, p.Token);
+                }
                 else
                 {
                     Console.WriteLine("[Roguelike] action pump: unknown type '" + p.Type + "'");
