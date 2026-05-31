@@ -273,7 +273,7 @@ namespace YgoMasterClient
             {
                 DetectStatDiff();
                 float dt = NextAnimDt();
-                RoguelikeStatAnim.TickFloaters(_floaters, dt, _tmpType, _anchoredPos3D);
+                RoguelikeStatAnim.TickFloaters(_floaters, dt, _tmpType);
                 RoguelikeStatAnim.TickCounters(_counters, dt, SetTmpText);
             }
             // Game over: the run died (active->false) without winning. Latch the edge, then show the
@@ -575,13 +575,15 @@ namespace YgoMasterClient
                 TMPro.TMP_Text.SetColor(tmp, r, g, b, 1f);
             }
 
-            // Pop just below the overlay center and drift up toward the HUD (top of the screen),
-            // fading out. LP rises on the left, GOLD on the right, so a simultaneous burst reads
-            // both numbers. Coords are in the overlay's center space (independent of the HUD's).
+            // Start near the overlay center (LP left, GOLD right so a simultaneous burst doesn't
+            // overlap), then fly in WORLD space to the HUD label's exact position. Place at the
+            // anchored start first, read its world position, and read the label's world position
+            // as the target — world space avoids the overlay-vs-header coordinate mismatch.
             float xOff = stat == "lp" ? -130f : 130f;
-            Vector3 startPos = new Vector3(xOff, -40f, 0);
-            Vector3 endPos   = new Vector3(xOff, 240f, 0);
-            _anchoredPos3D.GetSetMethod().Invoke(ct, new IntPtr[] { new IntPtr(&startPos) });
+            Vector3 startAnchored = new Vector3(xOff, -40f, 0);
+            _anchoredPos3D.GetSetMethod().Invoke(ct, new IntPtr[] { new IntPtr(&startAnchored) });
+            Vector3 startPos = Transform.GetPosition(ct);
+            Vector3 endPos   = Transform.GetPosition(GameObject.GetTransform(labelGo));
 
             RoguelikeStatAnim.HudCounter counter = _counters.Find(c => c.LabelPath == labelPath);
             if (counter != null)

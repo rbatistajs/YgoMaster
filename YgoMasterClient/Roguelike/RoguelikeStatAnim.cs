@@ -21,9 +21,9 @@ namespace YgoMasterClient
 
         public class FloatingDelta
         {
-            public IntPtr Go;            // TMP clone parented under the map canvas root
-            public Vector3 StartPos;     // canvas center + per-stat Y offset
-            public Vector3 EndPos;       // HUD label anchored pos
+            public IntPtr Go;            // TMP clone parented under the overlay (Window) root
+            public Vector3 StartPos;     // WORLD position near screen center (per-stat X offset)
+            public Vector3 EndPos;       // WORLD position of the HUD label (LP / GOLD)
             public float T;
             public float R, G, B;        // base color (sign-tinted)
             public HudCounter Pending;   // deferred — activated when this floater lands
@@ -50,10 +50,11 @@ namespace YgoMasterClient
             return 1f - u * u * u;
         }
 
-        // Advance every floater: lerp pos + color alpha + scale; on T>=1 destroy the GO and
-        // arm its deferred HudCounter.
-        public static void TickFloaters(List<FloatingDelta> floaters, float dt,
-                                        IntPtr tmpType, IL2Property anchoredPos3D)
+        // Advance every floater: lerp WORLD position from center to the HUD label, shrink, and fade
+        // (kept opaque during the flight, fades only on arrival). World space so the floater (in the
+        // overlay) and the label (inside the header layout) share coordinates. On T>=1 destroy the
+        // GO and arm its deferred HudCounter (the HUD count-up takes over right where the number landed).
+        public static void TickFloaters(List<FloatingDelta> floaters, float dt, IntPtr tmpType)
         {
             for (int i = floaters.Count - 1; i >= 0; i--)
             {
@@ -67,11 +68,15 @@ namespace YgoMasterClient
                     Lerp(f.StartPos.y, f.EndPos.y, e),
                     Lerp(f.StartPos.z, f.EndPos.z, e));
                 IntPtr ct = GameObject.GetTransform(f.Go);
-                anchoredPos3D.GetSetMethod().Invoke(ct, new IntPtr[] { new IntPtr(&pos) });
+                Transform.SetPosition(ct, pos); // world space -> lands exactly on the HUD label
                 float scale = Lerp(1.4f, 1.0f, e);
                 Transform.SetLocalScale(ct, new Vector3(scale, scale, scale));
                 IntPtr tmp = GameObject.GetComponent(f.Go, tmpType);
-                if (tmp != IntPtr.Zero) TMPro.TMP_Text.SetColor(tmp, f.R, f.G, f.B, 1f - t);
+                if (tmp != IntPtr.Zero)
+                {
+                    float alpha = t < 0.7f ? 1f : 1f - (t - 0.7f) / 0.3f; // opaque in flight, fade on arrival
+                    TMPro.TMP_Text.SetColor(tmp, f.R, f.G, f.B, alpha);
+                }
                 if (done)
                 {
                     UnityObject.Destroy(f.Go);
