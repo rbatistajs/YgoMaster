@@ -469,8 +469,12 @@ namespace YgoMasterClient
             IntPtr clone = UnityObject.Instantiate(src, GameObject.GetTransform(parentGo));
             UnityObject.SetName(clone, "GoldNum");
             Hide(clone, "IconDeckNum"); // no icon (placeholder for a future gold sprite)
-            Vector3 p = new Vector3(150f, 0, 0); // sit to the right of the LP slot (tune visually)
-            _anchoredPos3D.GetSetMethod().Invoke(GameObject.GetTransform(clone), new IntPtr[] { new IntPtr(&p) });
+            // The header lays its children out left-to-right by sibling order, so place GoldNum
+            // immediately after the LP slot (DeckNum). The deck-edit button keeps its later index,
+            // so the order becomes LP -> GOLD -> button (a fresh clone is appended last otherwise).
+            IntPtr deckT = GameObject.GetTransform(src);
+            IntPtr goldT = GameObject.GetTransform(clone);
+            Transform.SetSiblingIndex(goldT, Transform.GetSiblingIndex(deckT) + 1);
             GameObject.SetActive(clone, true);
             _goldLabelGo = clone;
         }
