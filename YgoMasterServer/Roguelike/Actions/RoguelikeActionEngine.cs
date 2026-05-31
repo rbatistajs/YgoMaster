@@ -338,6 +338,7 @@ namespace YgoMaster
 
             Random rng = new Random(unchecked((int)(run.Seed ^ ((long)run.ActionToken * 2654435761L)))); // Knuth multiplicative hash
             HashSet<int> anyPool = RoguelikeCardPool.AnyPool(dataDirectory, regulation, run.Ascension);
+            HashSet<int> underLimitPool = null; // lazy: anyPool minus cards the run already owns at their copy limit
 
             List<Dictionary<string, object>> allCards = new List<Dictionary<string, object>>();
             for (int packIdx = 0; packIdx < packs; packIdx++)
@@ -356,13 +357,21 @@ namespace YgoMaster
                         string source = pool != null ? Utils.GetValue<string>(pool, "source", "any") : "any";
                         if (source != "any")
                             Console.WriteLine("[Roguelike] pool.source '" + source + "' not supported; falling back to 'any'");
+                        // excludeOwnedAtLimit: drop cids the run already owns at their copy/banlist limit
+                        // (by canonical) so they're never drawn. Built once (reflects the pre-roll collection).
+                        HashSet<int> universe = anyPool;
+                        if (pool != null && Utils.GetValue<bool>(pool, "excludeOwnedAtLimit", false))
+                        {
+                            if (underLimitPool == null) underLimitPool = FilterOutOwnedAtLimit(anyPool, run, dataDirectory, regulation);
+                            universe = underLimitPool;
+                        }
                         // rarityRates: action override + pity bonus, on top of layered (global+asc) rates
                         Dictionary<int, double> rrEffective = MergeRarityRatesWithPity(
                             RoguelikeCardPool.LayeredRarityRates(dataDirectory, run.Ascension),
                             pool != null ? Utils.GetValue<Dictionary<string, object>>(pool, "rarityRates") : null,
                             pityCfg, run.Pity);
                         List<RoguelikeCardPool.DrawResult> drawn = RoguelikeCardPool.DrawN(
-                            dataDirectory, anyPool, pool, count, rng, run.Ascension, usedPack, rrEffective, true);
+                            dataDirectory, universe, pool, count, rng, run.Ascension, usedPack, rrEffective, true);
                         Console.WriteLine("[Roguelike] DrawN: requested=" + count + " got=" + drawn.Count);
                         packDraws.AddRange(drawn);
                     }
@@ -375,6 +384,37 @@ namespace YgoMaster
                 if (pityCfg != null) UpdatePity(run.Pity, packDraws, pityCfg);
             }
             return allCards;
+        }
+
+        // Universe minus any cid whose CANONICAL card the run already owns at (or above) its copy
+        // limit — standard 3, reduced by the regulation banlist. Owned copies are summed from the run
+        // collection by canonical (alt arts count together). Used by pool.excludeOwnedAtLimit.
+        static HashSet<int> FilterOutOwnedAtLimit(HashSet<int> universe, RoguelikeRun run,
+            string dataDirectory, Dictionary<string, object> regulation)
+        {
+            int regId = RoguelikeCardPool.RegulationId(dataDirectory);
+            Dictionary<int, int> ownedByCanon = new Dictionary<int, int>();
+            if (run.Cards != null)
+                foreach (KeyValuePair<string, object> kv in run.Cards)
+                {
+                    int cid; if (!int.TryParse(kv.Key, out cid)) continue;
+                    Dictionary<string, object> e = kv.Value as Dictionary<string, object>;
+                    int tn = e != null ? Utils.GetValue<int>(e, "tn") : 0;
+                    if (tn <= 0) continue;
+                    int canon = RoguelikeCardPool.Canon(dataDirectory, cid);
+                    int cur; ownedByCanon.TryGetValue(canon, out cur);
+                    ownedByCanon[canon] = cur + tn;
+                }
+            HashSet<int> result = new HashSet<int>();
+            foreach (int cid in universe)
+            {
+                int canon = RoguelikeCardPool.Canon(dataDirectory, cid);
+                int owned; ownedByCanon.TryGetValue(canon, out owned);
+                int limit = Math.Min(3, RoguelikeCardPool.CopyLimit(regulation, regId, canon));
+                if (owned < limit) result.Add(cid); // still room under the limit -> eligible
+            }
+            Console.WriteLine("[Roguelike] excludeOwnedAtLimit: " + universe.Count + " -> " + result.Count + " cids");
+            return result;
         }
 
         // pick:

@@ -311,6 +311,11 @@ single pull — see [`addCard`](#addcard).)
   a failed pull is skipped (that pack ends up with fewer cards). Each pull's `pool` is a random
   spec (same fields as the modifiers' [random spec](#modifiers-starting-board)), so `source`,
   `random`, `subtype`, numeric filters, and the new `rarity` / `rarities` filter all work.
+- **`pool.excludeOwnedAtLimit`** *(bool, default false)* — when true, never draw a card the run
+  already owns at its copy limit (standard 3, reduced by the regulation banlist: limited = 1,
+  semi = 2, forbidden = 0). Owned copies are counted by **canonical** card (`CARD_Same`), so alt
+  arts count together. Useful for reward pools that should keep handing out *new* / still-usable
+  cards instead of dead duplicates. (Works in `openpack` and `addCard`.)
 - **`pick` vs total** — pick bounds are over the **total** shown in the result UI. With
   `packs: 3` and `sum(pulls.count) = 8`, the result shows 24 cards; `pick: 5` makes the player
   choose exactly 5, `pick: { min: 1, max: 5 }` lets them pick between 1 and 5.
