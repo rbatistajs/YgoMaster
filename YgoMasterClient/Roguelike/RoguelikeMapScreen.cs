@@ -90,9 +90,11 @@ namespace YgoMasterClient
         // the deck button, then fade. When all land, the action is acked (the cards were already
         // applied server-side). _bindingMethod = BindingCardMaterial.Binding(RawImage, cid, rareType).
         static IL2Method _bindingMethod;
-        const float CardFlightDuration = 0.9f;
-        const float CardW = 200f, CardH = 292f;   // ~card aspect (tune)
-        class CardFlight { public IntPtr Go; public Vector3 StartPos, EndPos; public float T; }
+        const float CardFlightDuration = 0.9f;     // flight phase (after the hold)
+        const float CardHoldFrac = 0.6f;           // hold the card at center this long (fraction of duration) before moving
+        const float CardStaggerFrac = 0.25f;       // extra hold per card in a multi-card burst
+        const float CardW = 200f, CardH = 292f;    // ~card aspect (tune)
+        class CardFlight { public IntPtr Go; public Vector3 StartPos, EndPos; public float T; public float Angle; }
         static readonly System.Collections.Generic.List<CardFlight> _cardFlights =
             new System.Collections.Generic.List<CardFlight>();
         static int _addCardAckToken = -1;   // ack this action token once all flights finish
@@ -657,7 +659,15 @@ namespace YgoMasterClient
                 PlaceNode(card, xOff, 0, new AssetHelper.Vector2(CardW, CardH)); // overlay-center + xOff
                 Vector3 startPos = Transform.GetPosition(GameObject.GetTransform(card));
                 Transform.SetAsLastSibling(GameObject.GetTransform(card));
-                _cardFlights.Add(new CardFlight { Go = card, StartPos = startPos, EndPos = endPos, T = -i * 0.18f });
+                // Nose-toward-target tilt (jet feel): the card's +Y points along the flight path.
+                Vector3 dir = new Vector3(endPos.x - startPos.x, endPos.y - startPos.y, 0);
+                float angle = (float)(Math.Atan2(dir.y, dir.x) * 180.0 / Math.PI) - 90f;
+                // Negative T = hold phase (card shown upright at center); flight starts when T reaches 0.
+                _cardFlights.Add(new CardFlight
+                {
+                    Go = card, StartPos = startPos, EndPos = endPos, Angle = angle,
+                    T = -(CardHoldFrac + i * CardStaggerFrac),
+                });
             }
             if (_cardFlights.Count == 0) { _addCardAckToken = -1; RoguelikeApi.ActionRespond(token); } // nothing spawned
         }
@@ -687,7 +697,8 @@ namespace YgoMasterClient
                 CardFlight f = _cardFlights[i];
                 f.T += dt / CardFlightDuration;
                 bool done = f.T >= 1f;
-                float t = f.T < 0 ? 0 : (done ? 1f : f.T);
+                bool holding = f.T < 0f;        // still in the show-at-center delay
+                float t = holding ? 0f : (done ? 1f : f.T);
                 float e = RoguelikeStatAnim.EaseOutCubic(t);
                 IntPtr ct = GameObject.GetTransform(f.Go);
                 Vector3 pos = new Vector3(
@@ -697,6 +708,11 @@ namespace YgoMasterClient
                 Transform.SetPosition(ct, pos);
                 float scale = RoguelikeStatAnim.Lerp(1.0f, 0.18f, e); // shrink into the button
                 Transform.SetLocalScale(ct, new Vector3(scale, scale, scale));
+                // Jet tilt: upright during the hold, then snap the nose toward the target over the
+                // first quarter of the flight and hold that angle the rest of the way.
+                float rot = holding ? 0f : f.Angle * (t < 0.25f ? t / 0.25f : 1f);
+                Vector3 euler = new Vector3(0, 0, rot);
+                _localEuler.GetSetMethod().Invoke(ct, new IntPtr[] { new IntPtr(&euler) });
                 IntPtr g = GameObject.GetComponent(f.Go, _graphicType);
                 if (g != IntPtr.Zero)
                 {
