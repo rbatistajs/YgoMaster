@@ -530,8 +530,18 @@ namespace YgoMasterClient
         {
             IntPtr labelGo = GameObject.FindGameObjectByPath(_go, labelPath);
             if (labelGo == IntPtr.Zero) return;
-            IntPtr clone = UnityObject.Instantiate(labelGo, GameObject.GetTransform(_go));
+            // Parent the floater to the full-screen Window node (not the header) so it isn't laid
+            // out by the header group and isn't clipped. Re-anchor it to the overlay center —
+            // otherwise the clone keeps the HUD label's anchors and lands off-screen.
+            IntPtr overlay = WindowRoot();
+            if (overlay == IntPtr.Zero) overlay = _go;
+            IntPtr clone = UnityObject.Instantiate(labelGo, GameObject.GetTransform(overlay));
             UnityObject.SetName(clone, "RgStatFloater_" + stat);
+            IntPtr ct = GameObject.GetTransform(clone);
+            SetVec(ct, _anchorMin, new AssetHelper.Vector2(0.5f, 0.5f));
+            SetVec(ct, _anchorMax, new AssetHelper.Vector2(0.5f, 0.5f));
+            SetVec(ct, _pivot,     new AssetHelper.Vector2(0.5f, 0.5f));
+            Transform.SetAsLastSibling(ct); // render on top of the window content
 
             float r, g, b;
             if (delta > 0) { r = RoguelikeStatAnim.PosR; g = RoguelikeStatAnim.PosG; b = RoguelikeStatAnim.PosB; }
@@ -547,10 +557,13 @@ namespace YgoMasterClient
                 TMPro.TMP_Text.SetColor(tmp, r, g, b, 1f);
             }
 
-            Vector3 endPos = GetAnchoredPos3D(GameObject.GetTransform(labelGo));
-            float yOff = stat == "lp" ? 60f : -60f; // LP up, GOLD down when both fire at once
-            Vector3 startPos = new Vector3(0, yOff, 0);
-            _anchoredPos3D.GetSetMethod().Invoke(GameObject.GetTransform(clone), new IntPtr[] { new IntPtr(&startPos) });
+            // Pop just below the overlay center and drift up toward the HUD (top of the screen),
+            // fading out. LP rises on the left, GOLD on the right, so a simultaneous burst reads
+            // both numbers. Coords are in the overlay's center space (independent of the HUD's).
+            float xOff = stat == "lp" ? -130f : 130f;
+            Vector3 startPos = new Vector3(xOff, -40f, 0);
+            Vector3 endPos   = new Vector3(xOff, 240f, 0);
+            _anchoredPos3D.GetSetMethod().Invoke(ct, new IntPtr[] { new IntPtr(&startPos) });
 
             RoguelikeStatAnim.HudCounter counter = _counters.Find(c => c.LabelPath == labelPath);
             if (counter != null)
@@ -581,11 +594,6 @@ namespace YgoMasterClient
                 System.Text.RegularExpressions.Regex.Match(s ?? "", @"-?\d+");
             int v;
             return m.Success && int.TryParse(m.Value, out v) ? v : fallback;
-        }
-
-        static Vector3 GetAnchoredPos3D(IntPtr t)
-        {
-            return _anchoredPos3D.GetGetMethod().Invoke(t).GetValueRef<Vector3>();
         }
 
         // True while a HUD counter is animating the given label — SetLpText skips it so the snap
