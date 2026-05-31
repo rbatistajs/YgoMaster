@@ -32,6 +32,7 @@ Authored for mod users editing files under `YgoMaster/Data/` / `DataLE/`.
 
 - [roguelike/settings.md](roguelike/settings.md) — `Settings.json` roguelike section
 - [roguelike/encounters.md](roguelike/encounters.md) — `Encounters.json` schema
+- [roguelike/initial-decks.md](roguelike/initial-decks.md) — `InitialDecks.json` (starter deck curation)
 
 ## Examples
 

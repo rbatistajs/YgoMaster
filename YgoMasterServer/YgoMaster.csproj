@@ -141,6 +141,7 @@
     <Compile Include="Roguelike\RoguelikeDeckPool.cs" />
     <Compile Include="Roguelike\RoguelikeSettings.cs" />
     <Compile Include="Roguelike\RoguelikeEncounters.cs" />
+    <Compile Include="Roguelike\RoguelikeStartingDecks.cs" />
     <Compile Include="Roguelike\RoguelikeActions.cs" />
     <Compile Include="Roguelike\RoguelikeModifiers.cs" />
     <Compile Include="Roguelike\RoguelikeCardPool.cs" />

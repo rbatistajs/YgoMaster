@@ -84,7 +84,7 @@ namespace YgoMaster
                 Seed = seed,
                 CreatedAt = DateTime.UtcNow.ToString("o"),
                 DeckChosen = false,
-                DeckOffers = RollDeckOfferFiles(seed, 3),
+                DeckOffers = RollDeckOfferFiles(seed, ascension),
                 Deck = null,
                 Act = 0,
                 Ascension = ascension,
@@ -94,18 +94,31 @@ namespace YgoMaster
             WriteRun(request, run);
         }
 
-        // Roll up to `count` distinct starter-deck files (seeded). Returns relative paths only;
-        // the deck data lives in the files and is read on demand (choose/expand).
-        List<object> RollDeckOfferFiles(int seed, int count)
+        // Roll the starter-deck offers for a new run (seeded). Returns relative paths only; the deck
+        // data lives in the files and is read on demand (choose/expand). Prefers the curated pool
+        // (InitialDecks.json: weighted + ascension-gated), and falls back to a uniform shuffle of the
+        // whole StartingDecks folder when that file is absent or nothing is eligible for `ascension`.
+        List<object> RollDeckOfferFiles(int seed, int ascension)
         {
-            List<string> files = RoguelikeDeckPool.ListFiles(dataDirectory);
+            Random rng = new Random(seed);
+            int count = RoguelikeStartingDecks.OfferCount(dataDirectory);
             List<object> result = new List<object>();
+
+            List<RoguelikeStartingDecks.Entry> elig = RoguelikeStartingDecks.Eligible(dataDirectory, ascension);
+            if (elig.Count > 0)
+            {
+                foreach (RoguelikeStartingDecks.Entry e in RoguelikeStartingDecks.Pick(elig, count, rng))
+                    result.Add(RelPath(System.IO.Path.Combine(dataDirectory, "Roguelike", "StartingDecks", e.Deck)));
+                return result;
+            }
+
+            // Fallback: uniform shuffle of every file in the folder (legacy behavior).
+            List<string> files = RoguelikeDeckPool.ListFiles(dataDirectory);
             if (files.Count == 0)
             {
                 Console.WriteLine("[Roguelike] no starter decks in Roguelike/StartingDecks");
                 return result;
             }
-            Random rng = new Random(seed);
             for (int i = files.Count - 1; i > 0; i--) // Fisher-Yates
             {
                 int j = rng.Next(i + 1);
@@ -130,10 +143,12 @@ namespace YgoMaster
                 {
                     RoguelikeDeckPool.StarterDeck d = RoguelikeDeckPool.LoadOne(System.IO.Path.Combine(dataDirectory, rel));
                     if (d == null) continue;
+                    // InitialDecks.json may override the display name; otherwise use the deck file name.
+                    string nameOverride = RoguelikeStartingDecks.NameOverrideFor(dataDirectory, System.IO.Path.GetFileName(rel));
                     offers.Add(new Dictionary<string, object>
                     {
                         { "deck_id", 90000001 + i },
-                        { "name", d.Name },
+                        { "name", !string.IsNullOrEmpty(nameOverride) ? nameOverride : d.Name },
                         { "status", 0 },
                         { "ct", Utils.GetValue<long>(d.Json, "ct") },
                         { "et", Utils.GetValue<long>(d.Json, "et") },
