@@ -138,6 +138,55 @@ namespace YgoMasterClient
         // duel.dll load base, kept to read DAT_1811adc50 (duel state) for the battle-mirror check.
         static IntPtr _duelLibBase;
 
+        // Read a card's basic vals by uniqueId: FUN_18002b210 resolves uid -> encoded (player | location<<8 |
+        // index<<16), or 0x1200 if the instance is gone; DLL_DuelGetCardBasicVal fills outVal (field cards
+        // location 0-6 forward to FUN_1800b0000 = LIVE, off-field = printed). outVal layout matches the field
+        // hook: cid+0, atk+4 (int), def+8 (int), race+20, attr+22, level+26. location codes: 0-12 field,
+        // 13 hand, 14 extra, 15 deck, 16 grave, 17 banish. _inCardQuery suppresses our buff while the field
+        // path re-enters FUN_1800b0000.
+        delegate uint Del_ResolveUid(uint uniqueId);
+        static Del_ResolveUid Func_ResolveUid;
+        const long RVA_ResolveUid = 0x2b210;
+        delegate void Del_DuelGetCardBasicVal(ulong player, int location, int index, IntPtr outVal);
+        static Del_DuelGetCardBasicVal Func_DuelGetCardBasicVal;
+        [ThreadStatic] static bool _inCardQuery;
+
+        public static bool CardBasicValByUid(int uid, IntPtr outVal, out int player, out int location, out int index)
+        {
+            player = 0; location = 0; index = 0;
+            if (Func_ResolveUid == null || Func_DuelGetCardBasicVal == null) return false;
+            uint enc = Func_ResolveUid((uint)uid);
+            if (enc == 0x1200) return false;   // instance gone
+            player = (int)(enc & 0xff);
+            location = (int)((enc >> 8) & 0xff);
+            index = (int)(enc >> 0x10);
+            _inCardQuery = true;
+            try { Func_DuelGetCardBasicVal((ulong)player, location, index, outVal); }
+            finally { _inCardQuery = false; }
+            return true;
+        }
+
+        // Intent bus (relic event hooks). The engine writes the active command into the duel state for BOTH
+        // sides -- the human via DLL_DuelComDoCommand and the CPU writing the state directly -- so polling
+        // these fields each SysAct tick is the only way an event also fires for the CPU. Fields (duelState+):
+        // 0x3ce4 pending stage (0 = idle), 0x3cf8 cmd (4 = normal summon), 0x3d04 player, 0x3d08 pos
+        // (13 = hand for a summon), 0x3d0c index. A single summon re-asserts cmd=4 across stages, so we don't
+        // edge-detect on pending here -- FireSummon de-dupes by the card instance. See duel-action-primitives.md.
+        static void PollIntentBus()
+        {
+            if (!RoguelikeDuelHooks.Has("summon") || _duelLibBase == IntPtr.Zero) return;
+            IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
+            if (ds == IntPtr.Zero) return;
+            long b = ds.ToInt64();
+            if (Marshal.ReadInt32((IntPtr)(b + 0x3ce4)) == 0) return;   // pending idle
+            if (Marshal.ReadInt32((IntPtr)(b + 0x3cf8)) != 4) return;   // only normal summon for now
+            int player = Marshal.ReadInt32((IntPtr)(b + 0x3d04));
+            int location = Marshal.ReadInt32((IntPtr)(b + 0x3d08));
+            int index = Marshal.ReadInt32((IntPtr)(b + 0x3d0c));
+            try { RoguelikeLua.FireSummon(player, location, index); }
+            catch (Exception ex) { Console.WriteLine("[hook] summon EX: " + ex.Message); }
+        }
+
         delegate void Del_AddRecord(IntPtr ptr, int size);
         delegate void Del_DLL_SetAddRecordDelegate(Del_AddRecord addRecord);
         static Del_DLL_SetAddRecordDelegate DLL_SetAddRecordDelegate;
@@ -186,6 +235,9 @@ namespace YgoMasterClient
             DLL_DuelComDebugCommand = Utils.GetFunc<Del_DLL_DuelComDebugCommand>(PInvoke.GetProcAddress(lib, "DLL_DuelComDebugCommand"));
 
             DLL_SetAddRecordDelegate = Utils.GetFunc<Del_DLL_SetAddRecordDelegate>(PInvoke.GetProcAddress(lib, "DLL_SetAddRecordDelegate"));
+
+            Func_ResolveUid = Utils.GetFunc<Del_ResolveUid>((IntPtr)(lib.ToInt64() + RVA_ResolveUid));
+            Func_DuelGetCardBasicVal = Utils.GetFunc<Del_DuelGetCardBasicVal>(PInvoke.GetProcAddress(lib, "DLL_DuelGetCardBasicVal"));
         }
 
         static void Log(string str)
@@ -235,6 +287,7 @@ namespace YgoMasterClient
         public static void OnDuelBegin(GameMode gameMode)
         {
             LogToFile(string.Empty, false);
+            RoguelikeLua.ResetDuelEvents();
             ReplayData.Clear();
             SpecialResultType = DuelResultType.None;
             SpecialFinishType = DuelFinishType.None;
@@ -345,7 +398,7 @@ namespace YgoMasterClient
             // the integration point for the (to-be-rebuilt) stat-buff: read cid/type/atk/def/level from
             // outVal and write deltas back, skipping the battle-snapshot mirror read (bit3 clear) via
             // IsBattleMirrorCombatant to avoid the attack-animation double.
-            if (_fieldCardValDepth != 0 || outVal == IntPtr.Zero || 6 < zone || !RoguelikeDuelHooks.HasBuff)
+            if (_fieldCardValDepth != 0 || _inCardQuery || outVal == IntPtr.Zero || 6 < zone || !RoguelikeDuelHooks.HasBuff)
             {
                 return;
             }
@@ -358,7 +411,7 @@ namespace YgoMasterClient
             int curDef = Marshal.ReadInt32(outVal, 8);
             bool mine = (player & 1) == (uint)MyID;
             int atk, def, levelDelta;
-            if (!RoguelikeLua.EvalFieldBuff(cid, race, attr, level, curAtk, curDef, zone, mine, out atk, out def, out levelDelta))
+            if (!RoguelikeLua.EvalFieldBuff(cid, race, attr, level, curAtk, curDef, zone, (int)(player & 1), mine, out atk, out def, out levelDelta))
             {
                 return;
             }
@@ -558,6 +611,9 @@ namespace YgoMasterClient
 
         public static int DLL_DuelSysAct()
         {
+            // Relic event hooks: poll the intent bus on every tick (cheap no-op unless a summon hook is
+            // loaded). Catches both the human and the CPU.
+            PollIntentBus();
             // Solo duels don't reach the ActionsToRunInNextSysAct drain (it lives inside the PvP block
             // below), so drain it here for non-PvP. Runs on the duel thread (this SysAct tick).
             if (!IsPvpDuel && !IsPvpSpectator && ActionsToRunInNextSysAct.Count > 0)

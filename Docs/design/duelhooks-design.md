@@ -4,7 +4,7 @@
 
 Dar às relíquias **efeitos via scripts Lua** (MoonSharp), pendurados em **hooks**.
 O primeiro hook implementado é o **`buff`** (substitui o antigo `buffs`
-declarativo); os hooks de **evento** (`onSummon`/`onAttack`/…) vêm depois.
+declarativo); os hooks de **evento** (`summon`/`attack`/…) vêm depois.
 
 Exemplo-alvo (benchmark do design, futuro — depende dos eventos + ações):
 
@@ -31,11 +31,14 @@ O antigo `buffs` declarativo (regras `match→delta`) foi **removido**: buff ago
 - Hook **`buff`**: `DuelGetFieldCardVal` chama `EvalBuff` por-card e aplica os
   deltas **com a regra do mirror** (anti-double no ataque — ver
   `duel-action-primitives.md`).
+- Evento **`summon`**: `DLL_DuelSysAct` faz polling do barramento de intenção
+  (`cmd==4` = normal summon) e dispara `Fire("summon", ctx)` na borda — pega
+  humano **e CPU**. §11.
 - Dev: `rghook load/clear/list`, `rglua`, `rgcardprops`.
 
 **Futuro:**
-- **Eventos** (`onSummon`/`onAttack`/…): reintroduzir a detecção de intenção
-  (campos de comando no `DLL_DuelSysAct`, que pega o CPU) e ligar no `Fire`. §11.
+- **Eventos**: estender pro `set`/`attack`/`activate`/… (mesmo barramento,
+  outros `cmd`); special-summon vem pelo barramento de resultado. §11.
 - **Ações** na API Lua (summon/damage/heal/draw/destroy…). §9.
 - **Server→client**: relíquia declara `scripts`, server manda no payload. §12.
 
@@ -84,7 +87,7 @@ Princípio para **todos** os hooks:
 
 | origem | o que | exemplo |
 |---|---|---|
-| **ctx** | valores **da instância (live)** — só o state sabe, já com efeitos | `cid, zone, mine, race, attr, level, atk, def` (atuais) |
+| **ctx** | valores **da instância (live)** — só o state sabe, já com efeitos | `cid, uid, zone, player_id, player_type, race, attr, level, atk, def` (atuais) |
 | **`card_props(c.cid)`** | **categoria/base estática** por cid | `subtype, frame, kind, icon` + stats impressos |
 
 - `c.race`/`c.attr`/`c.level`/`c.atk`/`c.def` vêm direto do `outVal` do
@@ -105,7 +108,7 @@ números; a aplicação correta (mirror) fica no C#.
 ```lua
 -- race_buff.lua
 on("buff", function(c, params)
-  if c.mine and c.race == params.race then
+  if c.player_type == "player" and c.race == params.race then
     return { atk = params.atk or 0, def = params.def or 0, level = params.level or 0 }
   end
 end)
@@ -114,7 +117,16 @@ end)
 ## 9. API Lua
 
 **Leitura (pronto)**
-- `card_props(cid)` → `{ cid, race, attr, level, atk, def, subtype, frame, kind, icon }` ou nil.
+- `card_props(cid)` → `{ cid, race, attr, level, atk, def, subtype, frame, kind, icon }` ou nil
+  (categoria/estático por cid).
+- `card_state(uid)` → state **live** da instância, lido direto da `duel.dll`
+  (`DLL_DuelGetCardBasicVal`): `{ uid, cid, race, attr, level, atk, def, player_id,
+  player_type, location, zone? }` ou nil se a instância sumiu. `location` é nome
+  (`"field"`/`"hand"`/`"grave"`/`"deck"`/`"extra"`/`"banish"`); `zone` (0-6) só
+  quando `location=="field"`. Carta no campo vem com valores LIVE (efeitos
+  aplicados); fora do campo, com os impressos.
+- `field_uid(p, zone)` → uid da instância na zona de monstro/campo (0-6), ou nil se
+  vazia. Útil pra escolher uma carta no console: `card_state(field_uid(0, 2))`.
 - `deck_top(p)` → cid (ou nil); `hand_count/deck_count/grave_count/extra_count/banish_count(p)` → int.
 - `on(name, fn)`; `log(x)`.
 
@@ -137,14 +149,35 @@ pros codes; `zone`/`index` inteiros.
   IL2CPP. A gente fixa um `FileSystemScriptLoader` e **suprime o ruído**
   redirecionando o `Console` na 1ª criação do `Script`.
 
-## 11. Eventos (futuro)
+## 11. Eventos (barramento de intenção)
 
-Os hooks de evento (`onSummon`/`onAttack`/…) usarão o **barramento de intenção**:
-campos de comando do `duelState` (`0x3cf8` cmd…) lidos no `DLL_DuelSysAct` —
-**pegam o CPU** (a IA escreve o estado direto). Catálogo de `cmd` empírico em
-`duel-action-primitives.md` (`0`=attack, `3`=activate, `4`=summon, `6`=set,
-`13`=draw, `17`=battle). O dispatch chama `Fire(name, ctx)` na borda do `cmd`;
-o ctx de evento será magro (`cid, player, zone`), props via `card_props`.
+Os hooks de evento usam o **barramento de intenção**: campos de comando do
+`duelState` lidos por polling no `DLL_DuelSysAct` (`PollIntentBus`) — **pegam o
+CPU** (a IA escreve o estado direto; um hook na função pegaria só o humano).
+Catálogo de `cmd` empírico em `duel-action-primitives.md` (`0`=attack,
+`3`=activate, `4`=summon, `6`=set, `13`=draw, `17`=battle). O engine **reafirma**
+o `cmd` ao longo dos stages da ação (ex.: selecionar + confirmar posição), então
+não dá pra edge-detectar por `pend`; em vez disso o dispatch **deduplica pela
+instância** (`player+uid+cid`) — `Fire(name, ctx)` 1x por carta. A chave reseta no
+início do duelo (`ResetDuelEvents`).
+
+**`summon` (implementado)** — dispara na intenção de **Normal Summon** (`cmd==4`).
+A carta ainda está na **mão** e a zona-destino ainda não existe, então o ctx é
+magro: `{ cid, uid, player_id, player_type, location, index }` (props via
+`card_props(e.cid)`). Script de teste: `summon_log.lua`. (Nomes de hook sem
+prefixo `on` — o `on(...)` já marca que é um evento, igual ao `buff`.)
+
+```lua
+on("summon", function(e, params)
+  if card_props(e.cid).frame == "normal" then
+    -- "quando invocar um normal, ..."
+  end
+end)
+```
+
+Próximos (mesmo mecanismo, outros `cmd`): `set` (`6`), `attack` (`0`, `pend!=0`),
+`activate` (`3`). Special-summon não passa pelo `cmd` — virá pelo barramento de
+resultado.
 
 ## 12. Server → client (futuro)
 

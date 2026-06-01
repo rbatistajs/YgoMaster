@@ -15,6 +15,9 @@ namespace YgoMasterClient
         static DynValue _loadParams = DynValue.Nil;   // params table active during the current LoadScript
 
         public static bool HasBuff { get { List<Entry> l; return _hooks.TryGetValue("buff", out l) && l.Count > 0; } }
+        public static bool HasAny { get { return _hooks.Count > 0; } }
+        // True if at least one callback is registered under name (cheap gate for event polling).
+        public static bool Has(string name) { List<Entry> l; return _hooks.TryGetValue(name, out l) && l.Count > 0; }
 
         // The params table the next on(...) registrations capture (set by RoguelikeLua.LoadScript around DoFile).
         public static void SetLoadParams(DynValue p) { _loadParams = p ?? DynValue.Nil; }
@@ -51,7 +54,7 @@ namespace YgoMasterClient
             return atk != 0 || def != 0 || level != 0;
         }
 
-        // generic event fire (no return value) -- for onSummon/onAttack/... once triggers come back.
+        // generic event fire (no return value) -- for summon/attack/... intent-bus events.
         public static void Fire(string name, DynValue ctx)
         {
             List<Entry> list;
