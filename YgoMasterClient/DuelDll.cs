@@ -166,6 +166,56 @@ namespace YgoMasterClient
             return true;
         }
 
+        // Begin a special summon (FUN_180625c00, RVA 0x625c00): fills the desc (op=4) and starts the placement
+        // state machine. Must run during active resolution (a hook context) -- the placement only pumps while
+        // the duel loop is live; injected from idle it stalls. The zone prompt is answered by the UI (player)
+        // / the AI (cpu). Signature: (player, cardRef*, face, mode, (cid<<16)|flagsLow, reason); cardRef points
+        // at the 4-byte [cid, state] zone entry.
+        delegate void Del_Func625c00(ushort player, IntPtr cardRef, ushort face, ushort mode, uint param5, ushort reason);
+        static Del_Func625c00 Func_625c00;
+        const long RVA_Func625c00 = 0x625c00;
+
+        // Entry-base (the [cid, state] start) per off-field pile, for the cardRef.
+        static long SpecialSummonSourceBase(int location)
+        {
+            switch (location)
+            {
+                case 13: return 0x1e4;   // hand
+                case 14: return 0x5a4;   // extra
+                case 15: return 0x3c4;   // deck
+                case 16: return 0x7fc;   // grave
+                case 17: return 0xa54;   // banish
+                default: return -1;
+            }
+        }
+
+        // Queue a special summon of (player, location, index) on the duel thread. location codes per
+        // SpecialSummonSourceBase; index 0 = top. Returns false if there's no card there / not bound.
+        public static bool QueueSpecialSummon(int player, int location, int index, int face, int mode, int reason)
+        {
+            if (Func_625c00 == null || _duelLibBase == IntPtr.Zero) return false;
+            long baseOff = SpecialSummonSourceBase(location);
+            if (baseOff < 0 || index < 0) return false;
+            IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
+            if (ds == IntPtr.Zero) return false;
+            long entryAddr = ds.ToInt64() + baseOff + ((long)(player & 1) * 0x377 + index) * 4;
+            int cid = (ushort)Marshal.ReadInt16((IntPtr)entryAddr);
+            if (cid == 0) return false;
+            lock (ActionsToRunInNextSysAct)
+                ActionsToRunInNextSysAct.Add(() => Func_625c00((ushort)player, (IntPtr)entryAddr, (ushort)face, (ushort)mode, (uint)cid << 16, (ushort)reason));
+            return true;
+        }
+
+        // Queue a raw debug command (DLL_DuelComDoDebugCommand, the "swiss-army-knife") on the duel thread.
+        // cmd legend / location codes in duel-action-primitives.md (8=->grave, 6=->hand/draw, 9/10=banish,
+        // 11=destroy, 20=shuffle deck, ...). Must run during active resolution (a hook context).
+        public static void QueueDebugCommand(int player, int location, int index, int cmd)
+        {
+            if (DLL_DuelComDoDebugCommand == null) return;
+            lock (ActionsToRunInNextSysAct)
+                ActionsToRunInNextSysAct.Add(() => DLL_DuelComDoDebugCommand(player, location, index, cmd));
+        }
+
         delegate void Del_AddRecord(IntPtr ptr, int size);
         delegate void Del_DLL_SetAddRecordDelegate(Del_AddRecord addRecord);
         static Del_DLL_SetAddRecordDelegate DLL_SetAddRecordDelegate;
@@ -217,6 +267,7 @@ namespace YgoMasterClient
 
             Func_ResolveUid = Utils.GetFunc<Del_ResolveUid>((IntPtr)(lib.ToInt64() + RVA_ResolveUid));
             Func_DuelGetCardBasicVal = Utils.GetFunc<Del_DuelGetCardBasicVal>(PInvoke.GetProcAddress(lib, "DLL_DuelGetCardBasicVal"));
+            Func_625c00 = Utils.GetFunc<Del_Func625c00>((IntPtr)(lib.ToInt64() + RVA_Func625c00));
         }
 
         static void Log(string str)

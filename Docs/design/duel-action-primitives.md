@@ -162,8 +162,12 @@ params (LP/fase).
 | 20 | embaralhar deck | |
 | 21 | toggle de LP (stele) | |
 | 22 | (= cmd 8 / variante grave) | |
+| **23 / 24** | **set ATK / set DEF** — `location` = zona de monstro (0-6), `index` = **valor**; aplica no campo e **conta no cálculo de dano**. É um **set absoluto** gravado no slot (não um delta); persistência a um recalc de efeito contínuo **a confirmar**. | |
 | 27 | perde o duelo (LP→0) | |
 | 1, 2 | emite `0x35` com id `0x178f`/`0x26d1` (não testado) | |
+| 25, 26 | lacuna (sem efeito mapeado) | |
+
+Range do switch: `cmd 0`–`27`; `28+` cai no default (no-op).
 
 ## Primitivas diretas
 

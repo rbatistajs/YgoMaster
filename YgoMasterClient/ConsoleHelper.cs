@@ -993,6 +993,18 @@ namespace YgoMasterClient
                         Console.WriteLine("[rgeff] view-event log " + (DuelDll.LogEffects ? "ON" : "OFF"));
                     }
                     break;
+                case "rgdbg":// dev: queue DLL_DuelComDoDebugCommand on the duel thread. Usage: rgdbg <player> <location> <index> <cmd> (deck->grave: rgdbg 0 15 0 8)
+                    {
+                        int dp, dloc, didx, dcmd;
+                        if (splitted.Length == 5 && int.TryParse(splitted[1], out dp) && int.TryParse(splitted[2], out dloc)
+                            && int.TryParse(splitted[3], out didx) && int.TryParse(splitted[4], out dcmd))
+                        {
+                            DuelDll.QueueDebugCommand(dp, dloc, didx, dcmd);
+                            Console.WriteLine("[rgdbg] queued player=" + dp + " loc=" + dloc + " idx=" + didx + " cmd=" + dcmd);
+                        }
+                        else Console.WriteLine("[rgdbg] usage: rgdbg <player> <location> <index> <cmd>   (deck->grave: rgdbg 0 15 0 8)");
+                    }
+                    break;
                 case "clsdump":// dev: dump an IL2 class's methods to _tmp. Usage: clsdump <Namespace>.<Class> [assembly]
                     {
                         if (splitted.Length < 2) { Console.WriteLine("[clsdump] usage: clsdump <Namespace>.<Class> [assembly]"); break; }

@@ -109,6 +109,37 @@ namespace YgoMasterClient
             // on(name, fn): pin a callback to a hook. The params table active during the load is captured and
             // passed back as fn's 2nd arg on dispatch (see RoguelikeDuelHooks).
             s.Globals["on"] = (Action<string, DynValue>)((name, fn) => RoguelikeDuelHooks.Register(name, fn));
+            // special_summon(player, from, index): begin a special summon of source[index] for player. from =
+            // "deck"/"grave"/"hand"/"extra"/"banish"; index 0 = top. MUST be called from inside a hook (active
+            // resolution) -- the placement only pumps while the duel loop is live. The zone is chosen by the
+            // owner (UI for the player, AI for the cpu). face/mode default 0 for now. Returns true if queued.
+            s.Globals["special_summon"] = (Func<int, string, int, bool>)((player, from, index) =>
+            {
+                int loc = LocationCode(from);
+                if (loc < 0) { Console.WriteLine("[lua] special_summon: bad source '" + from + "'"); return false; }
+                return DuelDll.QueueSpecialSummon(player, loc, index, 0, 0, 0);
+            });
+            // debug_command(player, location, index, cmd): raw engine "swiss-army-knife"
+            // (DLL_DuelComDoDebugCommand). Low-level escape hatch -- nicer per-cmd aliases (to_grave, draw, ...)
+            // come later. cmd: 8=->grave, 6=->hand/draw, 9/10=banish, 11=destroy, 20=shuffle deck, ... (see
+            // duel-action-primitives.md). location: 13=hand, 15=deck, 16=grave, 17=banish, 0-6=monster zones.
+            // Must be called from inside a hook (active resolution).
+            s.Globals["debug_command"] = (Action<int, int, int, int>)((player, location, index, cmd) =>
+                DuelDll.QueueDebugCommand(player, location, index, cmd));
+        }
+
+        // Location name -> code (inverse of LocationName), for the action API.
+        static int LocationCode(string name)
+        {
+            switch (name)
+            {
+                case "hand": return 13;
+                case "extra": return 14;
+                case "deck": return 15;
+                case "grave": return 16;
+                case "banish": return 17;
+                default: return -1;
+            }
         }
 
         // Lua table from static card props (cid/race/attr/level/atk/def + subtype/frame/kind/icon).
