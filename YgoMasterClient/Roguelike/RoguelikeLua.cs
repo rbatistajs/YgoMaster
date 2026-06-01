@@ -126,6 +126,24 @@ namespace YgoMasterClient
             // Must be called from inside a hook (active resolution).
             s.Globals["debug_command"] = (Action<int, int, int, int>)((player, location, index, cmd) =>
                 DuelDll.QueueDebugCommand(player, location, index, cmd));
+            // run_effect(id, p1, p2, p3): raw view-event dispatch -- plays a DuelViewType cutin/animation
+            // without touching the real effect (low-level escape hatch). id = DuelViewType value (e.g. 0x48
+            // CutinActivate, 0x23 CardHappen). Must be called from inside a hook (active resolution).
+            s.Globals["run_effect"] = (Action<int, int, int, int>)((id, p1, p2, p3) => DuelDll.QueueRunEffect(id, p1, p2, p3));
+            // effect_activate_zone(player, zone) / effect_activate_card(player, cid): play the "effect
+            // activates" flash + a card highlight. ..._zone highlights the field monster at (player, zone);
+            // ..._card pops the card art (cid) on the side (works even if it's not on the field). Both open the
+            // activation cutin (CutinActivate) first, since the highlight (CardHappen) only renders inside it.
+            s.Globals["effect_activate_zone"] = (Action<int, int>)((player, zone) =>
+            {
+                DuelDll.QueueRunEffect(0x48, player & 1, 0, 0);
+                DuelDll.QueueRunEffect(0x23, (player & 1) + zone * 2, 0, 0);
+            });
+            s.Globals["effect_activate_card"] = (Action<int, int>)((player, cid) =>
+            {
+                DuelDll.QueueRunEffect(0x48, player & 1, 0, 0);
+                DuelDll.QueueRunEffect(0x23, player & 1, cid, 0);
+            });
         }
 
         // Location name -> code (inverse of LocationName), for the action API.

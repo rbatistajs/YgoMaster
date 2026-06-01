@@ -1005,6 +1005,22 @@ namespace YgoMasterClient
                         else Console.WriteLine("[rgdbg] usage: rgdbg <player> <location> <index> <cmd>   (deck->grave: rgdbg 0 15 0 8)");
                     }
                     break;
+                case "rgrun":// dev: queue a view-event dispatch (DuelViewType cutin/animation). Usage: rgrun <id|0xNN> <p1> <p2> <p3> (CutinActivate: rgrun 0x48 0 <cid> 0)
+                    {
+                        int rid = 0; string ridStr = splitted.Length > 1 ? splitted[1] : "";
+                        bool ridOk = (ridStr.StartsWith("0x") || ridStr.StartsWith("0X"))
+                            ? int.TryParse(ridStr.Substring(2), System.Globalization.NumberStyles.HexNumber, null, out rid)
+                            : int.TryParse(ridStr, out rid);
+                        int rp1, rp2, rp3;
+                        if (ridOk && splitted.Length == 5 && int.TryParse(splitted[2], out rp1)
+                            && int.TryParse(splitted[3], out rp2) && int.TryParse(splitted[4], out rp3))
+                        {
+                            DuelDll.QueueRunEffect(rid, rp1, rp2, rp3);
+                            Console.WriteLine("[rgrun] queued id=" + rid + " p1=" + rp1 + " p2=" + rp2 + " p3=" + rp3);
+                        }
+                        else Console.WriteLine("[rgrun] usage: rgrun <id|0xNN> <p1> <p2> <p3>   (CutinActivate: rgrun 0x48 0 <cid> 0)");
+                    }
+                    break;
                 case "clsdump":// dev: dump an IL2 class's methods to _tmp. Usage: clsdump <Namespace>.<Class> [assembly]
                     {
                         if (splitted.Length < 2) { Console.WriteLine("[clsdump] usage: clsdump <Namespace>.<Class> [assembly]"); break; }

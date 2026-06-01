@@ -216,6 +216,16 @@ namespace YgoMasterClient
                 ActionsToRunInNextSysAct.Add(() => DLL_DuelComDoDebugCommand(player, location, index, cmd));
         }
 
+        // Queue a view-event dispatch (the engine's runEffect, via originalRunEffect) on the duel thread --
+        // plays a DuelViewType cutin/animation without touching the real effect. id = DuelViewType value;
+        // params per the emit site (e.g. CutinActivate 0x48 = (player, cardTextId, 0)). See duelhooks.md.
+        public static void QueueRunEffect(int id, int p1, int p2, int p3)
+        {
+            if (originalRunEffect == null) return;
+            lock (ActionsToRunInNextSysAct)
+                ActionsToRunInNextSysAct.Add(() => originalRunEffect(id, p1, p2, p3));
+        }
+
         delegate void Del_AddRecord(IntPtr ptr, int size);
         delegate void Del_DLL_SetAddRecordDelegate(Del_AddRecord addRecord);
         static Del_DLL_SetAddRecordDelegate DLL_SetAddRecordDelegate;
