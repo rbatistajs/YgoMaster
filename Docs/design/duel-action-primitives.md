@@ -183,6 +183,124 @@ A colocação roda nos ticks seguintes (pump state 1 → state machine). Ela
 Achado via **breakpoint de hardware** na escrita de `desc+0x26 == 4` (DR0,
 write 2 bytes) — o RIP que escreve `op=4` cai dentro da begin-SS.
 
+## Receita C# — special summon (a reimplementar)
+
+> Removido do `DuelDll.cs` (estava como dev `rgss`) até a gente saber fazer
+> mid-attack sem cancelar (ver Notas). Esta é a receita pra reconstruir.
+
+Estado base: `dsP = *(IntPtr*)(libBase + 0x11adc50)`; stride por player `0xddc`.
+
+**Special summon do deck** (a carta sai do deck, dispara triggers):
+
+```csharp
+// begin-SS: FUN_180625c00(player, cardRef, face, mode, flags, reason), RVA 0x625c00
+//   cardRef = ponteiro pra entrada de 4 bytes [cid(2), state(2)] da zona
+//   flags   = (cid << 16) | flagsLow   (high word = card id; low word vai pro desc[8])
+long pbase     = dsP + player*0xddc;
+int  countBefore = ReadInt32(pbase + 0x10);                       // main deck count
+long entryAddr = dsP + 0x3c4 + (player*0x377 + deckIndex)*4;       // deck[deckIndex]
+int  cid       = ReadInt16(entryAddr);
+Func625c00(player, entryAddr, face, mode, (uint)cid << 16, 0);
+// depois: auto-zone (o prompt de zona só sobe quando o SysAct processa).
+```
+
+**Auto-zone** (responde o prompt de zona automaticamente; roda por tick no
+`DLL_DuelSysAct` até a carta sair do deck):
+
+```csharp
+// cada tick enquanto pendente:
+int cnt = ReadInt32(dsP + player*0xddc + 0x10);
+if (cnt < countBefore) { /* colocado, fim */ }
+else {
+    int zone = FindFreeMonsterZone(player);            // slot 0-6 com cid==0, do centro
+    if (zone >= 0) hookDLL_DuelComDoCommand.Original(player, zone, 0, 12);  // cmd 12 = confirma zona
+}
+```
+
+**Revive do cemitério (estilo Call of the Haunted):** idêntico, trocando a base
+da zona de `0x3c4` (deck) por **`0x7fc`** (cemitério) e o índice pelo slot do
+monstro no grave. O engine usa a mesma begin-SS; o alvo vem do targeting
+(uniqueId→ptr), não de índice fixo. (Detalhe em `duelhooks-design.md` §… e na
+análise do cid `0x137d`.)
+
+**Mandar carta → cemitério / banir** (`FUN_180153dd0`, RVA `0x153dd0`):
+
+```csharp
+// FUN_180153dd0(player, location, mode 0=grave/1=banish, uniqueId, flags, reason)
+// uniqueId resolvido da entrada da zona: (entry & 1) + (entry >> 8) * 2
+// baseOff por location (note: +2 vs a tabela de zonas, p/ ler o state):
+//   hand 0x1e6 | extra 0x5a6 | deck 0x3c6 | grave 0x7fe | banish 0xa56
+long entryAddr = dsP + baseOff + (player*0x377 + index)*4;
+int  entry     = ReadInt16(entryAddr);
+uint uniqueId  = (uint)((entry & 1) + (entry >> 8) * 2);
+Func153dd0(player, location, mode, uniqueId, flags, reason);
+```
+
+**Pendências** (por isso foi removido): o auto-zone via `cmd 12` **cancela um
+ataque em andamento** (o prompt sobrescreve o command-mode), e mid-attack
+dispara a regra de Replay. Reimplementar só depois de resolver isso (ver Notas
++ TODO). A begin-SS (`FUN_180625c00`) e o emit/record continuam no decomp.
+
+## Stat de campo (`FUN_1800b0000`) — buff e a regra do mirror (anti-double)
+
+Hook do **valor de carta no campo**: `FUN_1800b0000` (RVA `0xb0000`), bindado como
+`DuelGetFieldCardVal(player, zone, outVal, flags, param5)`. É onde o stat-buff
+(atk/def/level) é aplicado — escreve de volta em `outVal`. Hoje o `DuelDll.cs`
+tem só o **esqueleto** (depth-guard + zona), com um `TODO(stat-buff)`; a lógica de
+buff foi removida pra recriar. Este é o conhecimento pra religar sem bugar.
+
+**Struct `outVal`** (offsets em bytes):
+
+| off | campo |
+|---|---|
+| `+0` | cid (ushort) |
+| `+4` | atk (int) — **escrever o delta aqui** |
+| `+8` | def (int) — delta |
+| `+0xc` | (int, lido p/ Peek) |
+| `+0x14` | type / raça (short) |
+| `+0x16` | attr (short) |
+| `+0x1a` | level (short) — delta de level |
+
+**Cuidados ao aplicar:**
+
+- **Depth-guard:** `FUN_1800b0000` chama a si mesma (sub-avaliações internas).
+  Aplicar o buff **só na chamada mais externa** (`_fieldCardValDepth == 0` após
+  decrementar), senão a carta leva o delta múltiplas vezes. Usar um contador
+  `[ThreadStatic]` em torno do `.Original`.
+- **Só zonas de monstro:** `zone` 0-6. Outras locations (mão/S&T/GY) retornam
+  ATK 0 — buffar pintaria valor-fantasma em slot vazio.
+- **`flags` bit3 (`& 8`):** contexto **raw/damage** (cálculo de dano). `set` =
+  caminho de cómputo; `clear` = leitura "de display".
+
+### A regra do mirror (por que o buff DOBRA no ataque)
+
+Durante a batalha, as leituras **bit3-clear** de `FUN_1800b0000` para os
+**combatentes** são servidas de um **snapshot mirror** (`DAT_1811adc60`, RVA
+`0x11adc60`) — que **já foi construído** a partir de uma chamada do caminho de
+cómputo, **com o buff já somado**. Se você **re-somar** o delta nessa leitura, o
+valor **dobra** (é o "ATK dobrado" que aparece na animação de ataque).
+
+Solução: **`IsBattleMirrorCombatant(player, zone)`** detecta se aquela carta é um
+combatente cujo valor bit3-clear vem do mirror; nesse caso **não re-aplica** o
+delta (os monstros que não estão batalhando continuam recebendo o buff normal).
+A detecção espelha o match do próprio engine:
+
+```
+duelState +0x1bb8  &0x10  == 0  -> batalha NÃO ativa (sem mirror; aplica normal)
+slot pos  = duelState + player*0xddc + zone*0x1c + 0x5e   (ushort)
+posId     = (pos & 1) + (pos >> 8) * 2
+para idx em {0,1}:                       // 2 combatentes
+    entryId   = mirror + idx*0x28 + 0x18   (ushort)
+    if posId != entryId: continua
+    stateByte = (duelState + 0x1bf1 + (entryId & 0x1ff)*8) & 3
+    entry17   = mirror + idx*0x28 + 0x17
+    if stateByte == entry17:  -> É combatente do mirror (PULA o buff)
+```
+
+Resumo: aplica o delta sempre, **exceto** quando `flags` bit3 está clear **e**
+`IsBattleMirrorCombatant` retorna true (leitura do mirror já-buffada). O
+`IsBattleMirrorCombatant` continua no `DuelDll.cs` pra reuso.
+
 ## Notas importantes
 
 - **Regra de Replay (mid-attack):** invocar **durante** a declaração de ataque
@@ -200,14 +318,17 @@ write 2 bytes) — o RIP que escreve `op=4` cai dentro da begin-SS.
 
 ## Bindings & dev-commands no client (`DuelDll.cs` / `ConsoleHelper.cs`)
 
-- `SpecialSummonFromDeck(player, deckIndex, face, mode, autoZone, forceZone)` → `rgss`
-- `DLL_DuelComDoDebugCommand` → `rgdbg <player> <location> <index> <cmd>`
-- `FUN_180153dd0` → `rg153 <player> <location> <mode> <index> [flags] [reason]`
-- `OnAttackSummonMask` (teste de duelHook) → `rgonatk [mask 0/1/2/3]`
-- Discovery loggers (com `reset` pra limpar a flag `NEW` antes de uma ação):
-  `rgsys` / `rgsys reset` (barramento de **intenção** — cmd nomeado, pega CPU),
-  `rgop` / `rgop reset` (barramento de **resultado** — opcodes do emitter).
-- Dev/RE: `rgdesc` (dump descritor), `rgcaller` (stack walk no emit), `rghwbp` (breakpoint de hardware), `rgcmd`/`rgcmdlog` (DoCommand), `rgsummon`/`rgdeck`/`rgtokens` (cheat-card/zonas/tokens).
+> **Removidos do código** (a investigação de RE cumpriu seu papel; este doc é a
+> referência). O `DuelDll.cs` ficou só com o stat-buff. Pra reconstruir o
+> special-summon / send-to-grave, ver "Receita C#" acima. Removidos: `rgss`
+> (`SpecialSummonFromDeck`+`Func625c00`), `rg153` (`FUN_180153dd0`), os discovery
+> loggers `rgsys`/`rgop` (+ emit hook), e os probes `rgdesc`/`rgcaller`/`rghwbp`/
+> `rgcmd`/`rgcmdlog`/`rgsummon`/`rgdeck`/`rgtokens`.
+
+Continuam no client (pré-existentes ou em uso): `DLL_DuelComDoDebugCommand` /
+`DLL_DuelComCheatCard` / `DLL_SetAddRecordDelegate` (bindings nativos, sem
+dev-command agora), e os dev-commands atuais `rgbuff` (stat-buff), `rgcardprops`
+(props por cid), `rglua` (smoke test MoonSharp).
 
 ## TODO / a confirmar
 

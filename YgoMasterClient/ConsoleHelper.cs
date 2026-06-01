@@ -949,6 +949,41 @@ namespace YgoMasterClient
                     RoguelikeApi.RunEncounterAction(splitted[1]);
                     Console.WriteLine("[rgencounter] " + splitted[1]);
                     break;
+                case "rghook":// dev: load/clear/list relic hook scripts (on("buff",fn) etc.). Usage: rghook load <file.lua> [params-json] | rghook clear | rghook list
+                    {
+                        if (splitted.Length > 1 && splitted[1] == "clear") { RoguelikeDuelHooks.Clear(); Console.WriteLine("[rghook] cleared"); break; }
+                        if (splitted.Length > 1 && splitted[1] == "list") { RoguelikeDuelHooks.DumpList(); break; }
+                        if (splitted.Length > 2 && splitted[1] == "load")
+                        {
+                            string pjson = splitted.Length > 3 ? string.Join(" ", splitted, 3, splitted.Length - 3) : null;
+                            RoguelikeLua.LoadScript(splitted[2], pjson);
+                            break;
+                        }
+                        Console.WriteLine("[rghook] usage: rghook load <file.lua> [params-json] | rghook clear | rghook list");
+                    }
+                    break;
+                case "rglua":// dev: run Lua on the RoguelikeLua engine (duel API: card_props/deck_top/*_count/on/log). Usage: rglua <code> | rglua file <name.lua>
+                    {
+                        if (splitted.Length > 2 && splitted[1] == "file") { RoguelikeLua.RunFile(splitted[2]); break; }
+                        string luaCode = splitted.Length > 1 ? string.Join(" ", splitted, 1, splitted.Length - 1) : "";
+                        if (luaCode.Length == 0) { Console.WriteLine("[rglua] usage: rglua <code>  |  rglua file <name.lua>"); break; }
+                        RoguelikeLua.RunCode(luaCode);
+                    }
+                    break;
+                case "rgcardprops":// dev: dump a card's static props (subType/race/level/atk/def) by cid. Usage: rgcardprops <cid>
+                    {
+                        int cpcid;
+                        if (splitted.Length > 1 && int.TryParse(splitted[1], out cpcid))
+                        {
+                            RoguelikeCardProps.Props cpp;
+                            if (RoguelikeCardProps.TryGet(cpcid, out cpp))
+                                Console.WriteLine("[rgcardprops] cid=" + cpp.Cid + " subType=" + cpp.SubType + " frame=" + cpp.Frame + " kind=" + cpp.Kind + " icon=" + cpp.Icon + " race=" + cpp.Race + " attr=" + cpp.Attr + " level=" + cpp.Level + " atk=" + cpp.Atk + " def=" + cpp.Def);
+                            else
+                                Console.WriteLine("[rgcardprops] cid " + cpcid + " not found in game card data");
+                        }
+                        else Console.WriteLine("[rgcardprops] usage: rgcardprops <cid>");
+                    }
+                    break;
                 case "clsdump":// dev: dump an IL2 class's methods to _tmp. Usage: clsdump <Namespace>.<Class> [assembly]
                     {
                         if (splitted.Length < 2) { Console.WriteLine("[clsdump] usage: clsdump <Namespace>.<Class> [assembly]"); break; }

@@ -48,6 +48,10 @@
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System.Data" />
     <Reference Include="System.Xml" />
+    <Reference Include="MoonSharp.Interpreter">
+      <HintPath>lib\MoonSharp\MoonSharp.Interpreter.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Include="YgoMasterClient\DuelTutorialSetting.cs" />
@@ -65,6 +69,9 @@
     <Compile Include="YgoMasterClient\SoloVisualNovel.cs" />
     <Compile Include="YgoMasterClient\SoloVisualNovelChapterView.cs" />
     <Compile Include="YgoMasterClient\Roguelike\RoguelikeApi.cs" />
+    <Compile Include="YgoMasterClient\Roguelike\RoguelikeCardProps.cs" />
+    <Compile Include="YgoMasterClient\Roguelike\RoguelikeLua.cs" />
+    <Compile Include="YgoMasterClient\Roguelike\RoguelikeDuelHooks.cs" />
     <Compile Include="YgoMasterClient\Roguelike\RoguelikeStatAnim.cs" />
     <Compile Include="YgoMasterClient\Roguelike\Actions\RoguelikeActionDriver.cs" />
     <Compile Include="YgoMasterClient\Roguelike\Actions\RoguelikePackResultHook.cs" />
@@ -197,10 +204,10 @@
   </PropertyGroup>
   <Target Name="CopyToGoatInstall" AfterTargets="Build"
           Condition="Exists('$(GoatInstallDir)')">
-    <Copy SourceFiles="$(OutputPath)YgoMasterClient.exe"
+    <Copy SourceFiles="$(OutputPath)YgoMasterClient.exe;$(OutputPath)MoonSharp.Interpreter.dll"
           DestinationFolder="$(GoatInstallDir)"
           SkipUnchangedFiles="true" />
-    <Message Text="[Goat] Copied YgoMasterClient.exe -&gt; $(GoatInstallDir)"
+    <Message Text="[Goat] Copied YgoMasterClient.exe + MoonSharp.Interpreter.dll -&gt; $(GoatInstallDir)"
              Importance="high" />
   </Target>
 </Project>

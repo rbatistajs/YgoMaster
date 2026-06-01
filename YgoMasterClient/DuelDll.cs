@@ -2,12 +2,12 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
-using YgoMaster.Net.Message;
-using YgoMaster.Net;
-using YgoMaster;
 using System.Runtime.InteropServices;
+using System.Text;
 using IL2CPP;
+using YgoMaster;
+using YgoMaster.Net;
+using YgoMaster.Net.Message;
 
 // NOTE: Be careful with threading here
 // - If you want to run something on the duel thread use ActionsToRunInNextSysAct
@@ -25,6 +25,10 @@ namespace YgoMasterClient
         static object LogLocker = new object();
 
         public static IntPtr CardPropMem;
+
+        // Duel.dll image base, exposed so the Lua engine (RoguelikeLua) can read the duel state
+        // (zone counters / deck top) without re-introducing RE plumbing here.
+        public static IntPtr DuelLibBase { get { return _duelLibBase; } }
 
         public static DuelResultType SpecialResultType;
         public static DuelFinishType SpecialFinishType;
@@ -121,6 +125,19 @@ namespace YgoMasterClient
         delegate int Del_DLL_DuelSysAct();
         static Hook<Del_DLL_DuelSysAct> hookDLL_DuelSysAct;
 
+        // Internal duel.dll function that computes a field card's effective ATK/DEF (base + all
+        // continuous effects). Display, AI and the damage step all read from it, so adding our
+        // delta to the effective value here makes a buff show blue AND apply in battle.
+        // outVal layout (short*): [0]=cid, +4=eff ATK, +8=eff DEF, +12=base ATK, +16=base DEF.
+        delegate void Del_DuelGetFieldCardVal(uint player, int zone, IntPtr outVal, uint flags, uint param5);
+        static Hook<Del_DuelGetFieldCardVal> hookDuelGetFieldCardVal;
+        const long RVA_DuelGetFieldCardVal = 0xb0000;
+        // FUN_1800b0000 recurses into itself (copy-stats / some card effects); buff only the outermost
+        // call so our delta is not stacked once per nesting level.
+        [ThreadStatic] static int _fieldCardValDepth;
+        // duel.dll load base, kept to read DAT_1811adc50 (duel state) for the battle-mirror check.
+        static IntPtr _duelLibBase;
+
         delegate void Del_AddRecord(IntPtr ptr, int size);
         delegate void Del_DLL_SetAddRecordDelegate(Del_AddRecord addRecord);
         static Del_DLL_SetAddRecordDelegate DLL_SetAddRecordDelegate;
@@ -147,11 +164,13 @@ namespace YgoMasterClient
             {
                 throw new Exception("Failed to load duel.dll");
             }
+            _duelLibBase = lib;
 
             InitProxyFunctions(lib);
 
             hookDLL_SetEffectDelegate = new Hook<Del_DLL_SetEffectDelegate>(DLL_SetEffectDelegate, PInvoke.GetProcAddress(lib, "DLL_SetEffectDelegate"));
             hookDLL_DuelSysAct = new Hook<Del_DLL_DuelSysAct>(DLL_DuelSysAct, PInvoke.GetProcAddress(lib, "DLL_DuelSysAct"));
+            hookDuelGetFieldCardVal = new Hook<Del_DuelGetFieldCardVal>(DuelGetFieldCardVal, (IntPtr)(lib.ToInt64() + RVA_DuelGetFieldCardVal));
 
             hookDLL_DuelComMovePhase = new Hook<Del_DLL_DuelComMovePhase>(DLL_DuelComMovePhase, PInvoke.GetProcAddress(lib, "DLL_DuelComMovePhase"));
             hookDLL_DuelComDoCommand = new Hook<Del_DLL_DuelComDoCommand>(DLL_DuelComDoCommand, PInvoke.GetProcAddress(lib, "DLL_DuelComDoCommand"));
@@ -310,6 +329,79 @@ namespace YgoMasterClient
             hookDLL_SetEffectDelegate.Original(Marshal.GetFunctionPointerForDelegate(myRunEffect), Marshal.GetFunctionPointerForDelegate(myIsBusyEffect));
         }
 
+        static void DuelGetFieldCardVal(uint player, int zone, IntPtr outVal, uint flags, uint param5)
+        {
+            _fieldCardValDepth++;
+            try
+            {
+                hookDuelGetFieldCardVal.Original(player, zone, outVal, flags, param5);
+            }
+            finally
+            {
+                _fieldCardValDepth--;
+            }
+            // Field stat hook (FUN_1800b0000). Outermost call only (depth 0); nested self-calls are the
+            // engine's own sub-evaluations. zone 0-6 = monster zones (other locations return ATK 0). This is
+            // the integration point for the (to-be-rebuilt) stat-buff: read cid/type/atk/def/level from
+            // outVal and write deltas back, skipping the battle-snapshot mirror read (bit3 clear) via
+            // IsBattleMirrorCombatant to avoid the attack-animation double.
+            if (_fieldCardValDepth != 0 || outVal == IntPtr.Zero || 6 < zone || !RoguelikeDuelHooks.HasBuff)
+            {
+                return;
+            }
+            int cid = (ushort)Marshal.ReadInt16(outVal, 0);
+            if (cid == 0) return;
+            int race = Marshal.ReadInt16(outVal, 20);
+            int attr = Marshal.ReadInt16(outVal, 22);
+            int level = Marshal.ReadInt16(outVal, 26);
+            int curAtk = Marshal.ReadInt32(outVal, 4);
+            int curDef = Marshal.ReadInt32(outVal, 8);
+            bool mine = (player & 1) == (uint)MyID;
+            int atk, def, levelDelta;
+            if (!RoguelikeLua.EvalFieldBuff(cid, race, attr, level, curAtk, curDef, zone, mine, out atk, out def, out levelDelta))
+            {
+                return;
+            }
+            // Anti-double: bit3-clear reads served from the battle snapshot mirror already include the buff
+            // (the mirror was built from a buffed compute-path call); apply only when this is NOT that read.
+            bool mirrorRead = (flags & 8) == 0 && IsBattleMirrorCombatant(player, zone);
+            if (!mirrorRead)
+            {
+                if (atk != 0) Marshal.WriteInt32(outVal, 4, Marshal.ReadInt32(outVal, 4) + atk);
+                if (def != 0) Marshal.WriteInt32(outVal, 8, Marshal.ReadInt32(outVal, 8) + def);
+                if (levelDelta != 0) Marshal.WriteInt16(outVal, 26, (short)(level + levelDelta));
+            }
+        }
+
+        // True when this field card is a current battle combatant whose bit3-clear value is served from
+        // the combat snapshot mirror (DAT_1811adc60) -- already built from a buffed compute-path call,
+        // so re-adding our delta would double it. Mirrors the engine's own combatant match in
+        // FUN_1800b0000 (slot+0x5e position id vs mirror entry +0x18, with the +0x1bf1 state check) so
+        // bystander monsters still receive the live buff. duel.dll Ghidra base is 0x180000000, hence
+        // DAT_1811adc50 -> RVA 0x11adc50 (duel state) and DAT_1811adc60 -> RVA 0x11adc60 (mirror).
+        static bool IsBattleMirrorCombatant(uint player, int zone)
+        {
+            if (_duelLibBase == IntPtr.Zero) return false;
+            long bas = _duelLibBase.ToInt64();
+            IntPtr duelState = Marshal.ReadIntPtr((IntPtr)(bas + 0x11adc50));
+            IntPtr mirror = Marshal.ReadIntPtr((IntPtr)(bas + 0x11adc60));
+            if (duelState == IntPtr.Zero || mirror == IntPtr.Zero) return false;
+            long ds = duelState.ToInt64();
+            long mr = mirror.ToInt64();
+            if ((Marshal.ReadByte((IntPtr)(ds + 0x1bb8)) & 0x10) == 0) return false;
+            ushort pos = (ushort)Marshal.ReadInt16((IntPtr)(ds + (long)(player & 1) * 0xddc + (long)zone * 0x1c + 0x5e));
+            int posId = (pos & 1) + ((pos >> 8) * 2);
+            for (int idx = 0; idx < 2; idx++)
+            {
+                int entryId = (ushort)Marshal.ReadInt16((IntPtr)(mr + idx * 0x28 + 0x18));
+                if (posId != entryId) continue;
+                int stateByte = Marshal.ReadByte((IntPtr)(ds + 0x1bf1 + (long)(entryId & 0x1ff) * 8)) & 3;
+                int entryByte17 = Marshal.ReadByte((IntPtr)(mr + idx * 0x28 + 0x17));
+                if (stateByte == entryByte17) return true;
+            }
+            return false;
+        }
+
         static Del_AddRecord AddRecord = (IntPtr ptr, int size) =>
         {
             for (int i = 0; i < size; i++)
@@ -466,6 +558,18 @@ namespace YgoMasterClient
 
         public static int DLL_DuelSysAct()
         {
+            // Solo duels don't reach the ActionsToRunInNextSysAct drain (it lives inside the PvP block
+            // below), so drain it here for non-PvP. Runs on the duel thread (this SysAct tick).
+            if (!IsPvpDuel && !IsPvpSpectator && ActionsToRunInNextSysAct.Count > 0)
+            {
+                List<Action> soloActions;
+                lock (ActionsToRunInNextSysAct)
+                {
+                    soloActions = new List<Action>(ActionsToRunInNextSysAct);
+                    ActionsToRunInNextSysAct.Clear();
+                }
+                foreach (Action a in soloActions) { try { a(); } catch (Exception ex) { Console.WriteLine("[duel] solo action EX: " + ex.Message); } }
+            }
             if (IsPvpDuel || IsPvpSpectator)
             {
                 if (LastSysActLogTime < DateTime.UtcNow - TimeSpan.FromSeconds(3))
