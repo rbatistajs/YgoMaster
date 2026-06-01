@@ -65,10 +65,11 @@ Campos do descritor `desc` (índices `ushort`):
 | `[0x13]` | 0x26 | op type (**4 = special summon**) |
 | `[0x14]` | 0x28 | sub-estado (driver do state machine) |
 
-## Detecção de eventos — os dois barramentos (base dos duelHooks)
+## Detecção de eventos — os três barramentos (base dos duelHooks)
 
-Há **dois** caminhos pra observar o que acontece no duelo, com finalidades
-distintas. A escolha entre eles é o que decide se um evento **pega a CPU**.
+Há **três** caminhos pra observar o que acontece no duelo. O barramento de
+**view** (#3, `RunEffect`) é o usado pelos duelHooks: semântico, pós-ação e pega a
+CPU. Os outros dois ficam como referência (intenção pré-ação; resultado cru).
 
 ### 1. Barramento de intenção (campos de comando, **polling**)
 
@@ -77,7 +78,8 @@ escritos pelo engine **pros dois lados**: o humano via `DLL_DuelComDoCommand`
 (UI) e a **CPU escrevendo o estado direto** (ela **não** chama o DoCommand).
 Por isso a detecção tem que ser **polling desses campos dentro de
 `DLL_DuelSysAct`**, não hook da função — o hook (`rgcmdlog`) só pega o humano.
-Foi assim que o ataque foi achado. Sonda: **`rgsys`** (discovery logger).
+Foi assim que o ataque foi achado. Sonda: `rgsys` (discovery logger, **removido** —
+o barramento de view venceu; ver #3).
 
 - `pend != 0` = intenção real em andamento (`cmd=0`/`pend=0` é **idle**, não ataque).
 - `player`/`pos` só são confiáveis com `pend != 0` (fora disso ficam *stale*).
@@ -109,11 +111,29 @@ com `player=1` e `pend!=0` sem nenhum input humano.
 board, num ring buffer (`DAT_1811adc20+0x10`, contador `+0x810`), repassado ao
 delegate `DAT_1811adb58` (setado por `DLL_SetAddRecordDelegate`) — é o que o
 replay/UI consome. Cobre o **resultado** (destroy, dano, draw efetivo, mover pra
-grave/banir). Sonda: **`rgop`** (discovery logger). Opcodes (low byte = tipo):
+grave/banir). Sonda: `rgrec` (discovery logger, **removido** — ver #3). Opcodes (low byte = tipo):
 `0x2c`=move, `0x43`/`0x44`=place, `0x6f`=level — mapeamento empírico em andamento.
+Args são **refs/uniqueIds**, não cid (precisa resolver).
 
-**Resumo:** *intenção* (pré-ação, pega CPU) = barramento 1 (`rgsys`);
-*resultado* (pós-ação) = barramento 2 (`rgop`).
+### 3. Barramento de view (`RunEffect` / `DuelViewType`) — **o escolhido**
+
+O `DuelClient` despacha um `Engine.ViewType` (= `DuelViewType`) por evento, via
+`RunEffect(id, p1, p2, p3)` (effect delegate, já hookado no `DuelDll.cs`, rodando
+em **todo** duelo). É **semântico** (`RunSummon`, `RunSpSummon`, `BattleAttack`,
+`CardBreak`, `CutinActivate`, `CutinDraw`…), **pega os dois lados** (a view anima
+player e CPU), dispara **1x** por evento, e roda **pós-ação** (a carta já está no
+destino — dá pra ler a zona). Sonda: **`rgeff`** (loga `ViewType` + `p1/p2/p3`).
+
+Params são refs/uniqueIds. Mapeamento confirmado: em `RunSummon`/`RunSpSummon` o
+**`p2` = uniqueId** da carta; resolver via `DuelDll.CardBasicValByUid` (mesmo
+caminho do `card_state`) dá o estado live com a **zona**. No `CardMove` o uid vai
+nos 9 bits baixos do `p1` (`& 0x1ff`) e o ref no `p3`.
+
+**Resumo:** *intenção* (pré-ação, pega CPU) = barramento 1 (sonda `rgsys`,
+removida); *resultado* (pós-ação, opcodes crus) = barramento 2 (sonda `rgrec`,
+removida); **view** (pós-ação, semântico, pega CPU) = barramento 3 (`rgeff`,
+mantido) — **é o que os duelHooks usam** (ver
+`duelhooks-design.md` §11).
 
 ## DLL_DuelComDoDebugCommand — o "canivete"
 

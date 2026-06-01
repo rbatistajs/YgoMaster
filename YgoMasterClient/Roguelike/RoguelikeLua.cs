@@ -85,28 +85,8 @@ namespace YgoMasterClient
             // zone? } or nil if the instance is gone.
             s.Globals["card_state"] = (Func<int, DynValue>)(uid =>
             {
-                if (uid <= 0) return DynValue.Nil;
-                IntPtr buf = Marshal.AllocHGlobal(64);
-                try
-                {
-                    int player, location, index;
-                    if (!DuelDll.CardBasicValByUid(uid, buf, out player, out location, out index)) return DynValue.Nil;
-                    int cid = (ushort)Marshal.ReadInt16(buf, 0);
-                    if (cid == 0) return DynValue.Nil;
-                    Table t = new Table(s);
-                    t["uid"] = uid; t["cid"] = cid;
-                    t["atk"] = Marshal.ReadInt32(buf, 4);
-                    t["def"] = Marshal.ReadInt32(buf, 8);
-                    t["race"] = (ushort)Marshal.ReadInt16(buf, 20);
-                    t["attr"] = (ushort)Marshal.ReadInt16(buf, 22);
-                    t["level"] = (ushort)Marshal.ReadInt16(buf, 26);
-                    t["player_id"] = player;
-                    t["player_type"] = (player & 1) == DuelDll.MyID ? "player" : "cpu";
-                    t["location"] = LocationName(location);
-                    if (location < 7) t["zone"] = location;
-                    return DynValue.NewTable(t);
-                }
-                finally { Marshal.FreeHGlobal(buf); }
+                Table t = BuildCardState(uid);
+                return t == null ? DynValue.Nil : DynValue.NewTable(t);
             });
             // field_uid(player, zone): uid of the instance in a monster/field zone (0-6), or nil if empty.
             // Handy to pick a specific card in the console: card_state(field_uid(0, 2)).
@@ -191,57 +171,58 @@ namespace YgoMasterClient
             return RoguelikeDuelHooks.EvalBuff(DynValue.NewTable(t), out datk, out ddef, out dlevel);
         }
 
-        // cid + uniqueId of a card in an off-field pile (the 4-byte [cid, state] entry). Used by FireSummon
-        // since at summon-intent time the card is still in its source pile (hand). base per location code.
-        static void ZoneEntry(int player, int location, int index, out int cid, out int uid)
+        // Live-state table of an instance by uniqueId, read straight from the duel.dll
+        // (DuelDll.CardBasicValByUid -> DLL_DuelGetCardBasicVal). Field cards (zone 0-6) come back with live
+        // values (effects applied); off-field with printed ones. Returns { uid, cid, race, attr, level, atk,
+        // def, player_id, player_type, location, zone? } or null if the instance is gone. Shared by
+        // card_state and the summon event.
+        static Table BuildCardState(int uid)
         {
-            cid = 0; uid = 0;
-            IntPtr ds = DuelState();
-            if (ds == IntPtr.Zero || index < 0) return;
-            long baseOff;
-            switch (location)
+            if (uid <= 0) return null;
+            IntPtr buf = Marshal.AllocHGlobal(64);
+            try
             {
-                case 13: baseOff = 0x1e4; break;   // hand
-                case 14: baseOff = 0x5a4; break;   // extra
-                case 15: baseOff = 0x3c4; break;   // deck
-                case 16: baseOff = 0x7fc; break;   // grave
-                case 17: baseOff = 0xa54; break;   // banish
-                default: return;                   // field zones don't use this table
+                int player, location, index;
+                if (!DuelDll.CardBasicValByUid(uid, buf, out player, out location, out index)) return null;
+                int cid = (ushort)Marshal.ReadInt16(buf, 0);
+                if (cid == 0) return null;
+                Table t = new Table(Engine());
+                t["uid"] = uid; t["cid"] = cid;
+                t["atk"] = Marshal.ReadInt32(buf, 4);
+                t["def"] = Marshal.ReadInt32(buf, 8);
+                t["race"] = (ushort)Marshal.ReadInt16(buf, 20);
+                t["attr"] = (ushort)Marshal.ReadInt16(buf, 22);
+                t["level"] = (ushort)Marshal.ReadInt16(buf, 26);
+                t["player_id"] = player;
+                t["player_type"] = (player & 1) == DuelDll.MyID ? "player" : "cpu";
+                t["location"] = LocationName(location);
+                if (location < 7) t["zone"] = location;
+                return t;
             }
-            long entry = ds.ToInt64() + baseOff + ((long)(player & 1) * 0x377 + index) * 4;
-            cid = (ushort)Marshal.ReadInt16((IntPtr)entry);
-            int state = (ushort)Marshal.ReadInt16((IntPtr)(entry + 2));
-            uid = (state & 1) + ((state >> 8) * 2);
+            finally { Marshal.FreeHGlobal(buf); }
         }
 
-        // De-dupe key of the last summon dispatched. The engine re-asserts cmd=4 across a summon's stages
-        // (select, then confirm position), so the poll sees the same intent on several ticks; we fire once per
-        // card instance. Reset between duels (ResetDuelEvents) so a recycled uid+cid can't be swallowed.
-        static long _lastSummonKey = -1;
-        public static void ResetDuelEvents() { _lastSummonKey = -1; }
-
-        // "summon" event, fired from the intent-bus poll (DuelDll.PollIntentBus) on a normal-summon intent.
-        // The card is still in its source pile (location/index from the command fields), so the ctx is lean:
-        // { cid, uid, player_id, player_type, location, index }. Scripts pull the category with
-        // card_props(e.cid). Destination zone isn't known yet at intent time.
-        public static void FireSummon(int player, int location, int index)
+        // "summon" event, fired from the view-event bus (DuelDll RunEffect on RunSummon / RunSpSummon). The
+        // card is already on the field, so resolving the uid gives the full live state including the
+        // destination zone. ctx = card_state + kind ("normal" | "special"). Scripts pull the category with
+        // card_props(e.cid).
+        public static void FireSummon(int uid, string kind)
         {
             if (!RoguelikeDuelHooks.Has("summon")) return;
-            int cid, uid;
-            ZoneEntry(player, location, index, out cid, out uid);
-            if (cid == 0) return;
-            // A given hand instance is normal-summoned only once, so keying by (player, uid, cid) fires the
-            // event exactly once even though the command repeats across ticks/stages.
-            long key = ((long)(player & 1) << 40) | ((long)uid << 20) | (uint)cid;
-            if (key == _lastSummonKey) return;
-            _lastSummonKey = key;
-            Table t = new Table(Engine());
-            t["cid"] = cid; t["uid"] = uid;
-            t["player_id"] = player & 1;
-            t["player_type"] = (player & 1) == DuelDll.MyID ? "player" : "cpu";
-            t["location"] = LocationName(location);
-            t["index"] = index;
+            Table t = BuildCardState(uid);
+            if (t == null) return;
+            t["kind"] = kind;
             RoguelikeDuelHooks.Fire("summon", DynValue.NewTable(t));
+        }
+
+        // "set" event, fired from the view bus (DuelDll RunEffect on CardSet, with the uid carried by the
+        // preceding CardMove). The card is already on the field, so the ctx is the full card_state.
+        public static void FireSet(int uid)
+        {
+            if (!RoguelikeDuelHooks.Has("set")) return;
+            Table t = BuildCardState(uid);
+            if (t == null) return;
+            RoguelikeDuelHooks.Fire("set", DynValue.NewTable(t));
         }
 
         // dev: load a hook script with a params table (JSON), registering its on(...) callbacks.

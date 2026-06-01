@@ -31,8 +31,9 @@ O antigo `buffs` declarativo (regras `match→delta`) foi **removido**: buff ago
 - Hook **`buff`**: `DuelGetFieldCardVal` chama `EvalBuff` por-card e aplica os
   deltas **com a regra do mirror** (anti-double no ataque — ver
   `duel-action-primitives.md`).
-- Evento **`summon`**: `DLL_DuelSysAct` faz polling do barramento de intenção
-  (`cmd==4` = normal summon) e dispara `Fire("summon", ctx)` na borda — pega
+- Eventos **`summon`** e **`set`** (barramento de view, `RunEffect`): `summon` em
+  `RunSummon`/`RunSpSummon` (uid no `p2`); `set` no `CardSet`, com o uid vindo do
+  `CardMove` anterior (`LastCardMoveUid`). ctx live completo (com **zona**), pega
   humano **e CPU**. §11.
 - Dev: `rghook load/clear/list`, `rglua`, `rgcardprops`.
 
@@ -149,35 +150,54 @@ pros codes; `zone`/`index` inteiros.
   IL2CPP. A gente fixa um `FileSystemScriptLoader` e **suprime o ruído**
   redirecionando o `Console` na 1ª criação do `Script`.
 
-## 11. Eventos (barramento de intenção)
+## 11. Eventos (barramento de view / `RunEffect`)
 
-Os hooks de evento usam o **barramento de intenção**: campos de comando do
-`duelState` lidos por polling no `DLL_DuelSysAct` (`PollIntentBus`) — **pegam o
-CPU** (a IA escreve o estado direto; um hook na função pegaria só o humano).
-Catálogo de `cmd` empírico em `duel-action-primitives.md` (`0`=attack,
-`3`=activate, `4`=summon, `6`=set, `13`=draw, `17`=battle). O engine **reafirma**
-o `cmd` ao longo dos stages da ação (ex.: selecionar + confirmar posição), então
-não dá pra edge-detectar por `pend`; em vez disso o dispatch **deduplica pela
-instância** (`player+uid+cid`) — `Fire(name, ctx)` 1x por carta. A chave reseta no
-início do duelo (`ResetDuelEvents`).
+Os hooks de evento usam o **barramento de view** (camada gerenciada): o
+`DuelClient` despacha um `Engine.ViewType` (= `DuelViewType`) por evento de board
+via `RunEffect(id, p1, p2, p3)`, que o `DuelDll.cs` **já intercepta** (effect
+delegate, instalado em todo duelo). É **semântico** (`RunSummon`/`RunSpSummon`/
+`BattleAttack`/`CardBreak`/…), **pega os dois lados** (a view anima player e CPU),
+dispara **1x** por evento, e roda **depois** da ação (a carta já está no destino).
+Comparativo dos três barramentos em `duel-action-primitives.md`.
 
-**`summon` (implementado)** — dispara na intenção de **Normal Summon** (`cmd==4`).
-A carta ainda está na **mão** e a zona-destino ainda não existe, então o ctx é
-magro: `{ cid, uid, player_id, player_type, location, index }` (props via
-`card_props(e.cid)`). Script de teste: `summon_log.lua`. (Nomes de hook sem
-prefixo `on` — o `on(...)` já marca que é um evento, igual ao `buff`.)
+Os params são **refs/uniqueIds**, não cid: no `RunSummon`/`RunSpSummon` o
+**`p2` = uniqueId** da carta invocada. Como ela já está no campo, resolver o uid
+(`DuelDll.CardBasicValByUid`, o mesmo caminho do `card_state`) dá o estado live
+completo, **incluindo a zona**.
+
+**`summon` (implementado)** — dispara em `RunSummon` (`kind="normal"`) e
+`RunSpSummon` (`kind="special"`). ctx = `card_state` + `kind`:
+`{ uid, cid, race, attr, level, atk, def, player_id, player_type, location, zone,
+kind }` (categoria via `card_props(e.cid)`). Script de teste: `summon_log.lua`.
+(Nome do hook sem prefixo `on` — o `on(...)` já marca evento, igual ao `buff`.)
 
 ```lua
 on("summon", function(e, params)
-  if card_props(e.cid).frame == "normal" then
-    -- "quando invocar um normal, ..."
+  if e.kind == "normal" and card_props(e.cid).frame == "normal" then
+    -- "quando invocar um normal, olhe o topo do deck..."
   end
 end)
 ```
 
-Próximos (mesmo mecanismo, outros `cmd`): `set` (`6`), `attack` (`0`, `pend!=0`),
-`activate` (`3`). Special-summon não passa pelo `cmd` — virá pelo barramento de
-resultado.
+**`set` (implementado)** — alguns eventos não trazem o uid e não são únicos
+(`CutinSet` dispara até no normal summon). O marcador **inequívoco** de set é o
+`CardSet`, mas ele não carrega o uid; o `CardMove` **imediatamente anterior**
+carrega (`p1 & 0x1ff`). São um **par atômico** (sempre `CardMove` → `CardSet`),
+então `DuelDll` guarda o `LastCardMoveUid` (global, atualizado em todo `CardMove`,
+reusável por outros eventos) e o consome no `CardSet`. O **player vem da resolução
+do uid** (controlador real do slot), não do turn player — então funciona até no
+set por quick-effect **no turno do oponente**. ctx = `card_state`.
+
+```lua
+on("set", function(e)   -- e = card_state (já no campo, com zona)
+  if card_props(e.cid).kind == "monster" then ... end
+end)
+```
+
+Próximos (mesmo barramento): `attack` (`BattleAttack`), `activate`
+(`CutinActivate`), `destroy` (`CardBreak`), `draw` (`CutinDraw`), etc. — o uid
+mora ora no `p2`, ora no `p1 & 0x1ff`, ora no `CardMove` anterior; mapa empírico
+em `duel-action-primitives.md`.
 
 ## 12. Server → client (futuro)
 

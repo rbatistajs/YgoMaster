@@ -984,6 +984,15 @@ namespace YgoMasterClient
                         else Console.WriteLine("[rgcardprops] usage: rgcardprops <cid>");
                     }
                     break;
+                case "rgeff":// dev: toggle the managed view-event logger (DuelViewType name + p1/p2/p3 from RunEffect). Usage: rgeff [on|off]
+                    {
+                        string effArg = splitted.Length > 1 ? splitted[1] : "toggle";
+                        if (effArg == "on") DuelDll.LogEffects = true;
+                        else if (effArg == "off") DuelDll.LogEffects = false;
+                        else DuelDll.LogEffects = !DuelDll.LogEffects;
+                        Console.WriteLine("[rgeff] view-event log " + (DuelDll.LogEffects ? "ON" : "OFF"));
+                    }
+                    break;
                 case "clsdump":// dev: dump an IL2 class's methods to _tmp. Usage: clsdump <Namespace>.<Class> [assembly]
                     {
                         if (splitted.Length < 2) { Console.WriteLine("[clsdump] usage: clsdump <Namespace>.<Class> [assembly]"); break; }

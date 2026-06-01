@@ -166,27 +166,6 @@ namespace YgoMasterClient
             return true;
         }
 
-        // Intent bus (relic event hooks). The engine writes the active command into the duel state for BOTH
-        // sides -- the human via DLL_DuelComDoCommand and the CPU writing the state directly -- so polling
-        // these fields each SysAct tick is the only way an event also fires for the CPU. Fields (duelState+):
-        // 0x3ce4 pending stage (0 = idle), 0x3cf8 cmd (4 = normal summon), 0x3d04 player, 0x3d08 pos
-        // (13 = hand for a summon), 0x3d0c index. A single summon re-asserts cmd=4 across stages, so we don't
-        // edge-detect on pending here -- FireSummon de-dupes by the card instance. See duel-action-primitives.md.
-        static void PollIntentBus()
-        {
-            if (!RoguelikeDuelHooks.Has("summon") || _duelLibBase == IntPtr.Zero) return;
-            IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
-            if (ds == IntPtr.Zero) return;
-            long b = ds.ToInt64();
-            if (Marshal.ReadInt32((IntPtr)(b + 0x3ce4)) == 0) return;   // pending idle
-            if (Marshal.ReadInt32((IntPtr)(b + 0x3cf8)) != 4) return;   // only normal summon for now
-            int player = Marshal.ReadInt32((IntPtr)(b + 0x3d04));
-            int location = Marshal.ReadInt32((IntPtr)(b + 0x3d08));
-            int index = Marshal.ReadInt32((IntPtr)(b + 0x3d0c));
-            try { RoguelikeLua.FireSummon(player, location, index); }
-            catch (Exception ex) { Console.WriteLine("[hook] summon EX: " + ex.Message); }
-        }
-
         delegate void Del_AddRecord(IntPtr ptr, int size);
         delegate void Del_DLL_SetAddRecordDelegate(Del_AddRecord addRecord);
         static Del_DLL_SetAddRecordDelegate DLL_SetAddRecordDelegate;
@@ -287,7 +266,6 @@ namespace YgoMasterClient
         public static void OnDuelBegin(GameMode gameMode)
         {
             LogToFile(string.Empty, false);
-            RoguelikeLua.ResetDuelEvents();
             ReplayData.Clear();
             SpecialResultType = DuelResultType.None;
             SpecialFinishType = DuelFinishType.None;
@@ -556,8 +534,62 @@ namespace YgoMasterClient
             return 0;
         }
 
+        // dev: dump the managed view-event bus (rgeff). RunEffect is our effect delegate -- the DLL calls it
+        // for every DuelViewType (RunSummon/RunSpSummon/BattleAttack/...) for BOTH players, in solo too. This
+        // is the semantic event source we want for relic hooks. WaitFrame skipped (per-frame noise).
+        public static bool LogEffects;
+
+        // Last CardMove's uid (p1 & 0x1ff), refreshed on every CardMove. Several view events (CardSet, ...)
+        // carry no uid of their own and pair with the CardMove right before them, so handlers read this.
+        public static int LastCardMoveUid = -1;
+
         static int RunEffect(int id, int param1, int param2, int param3)
         {
+            if (LogEffects && id != (int)DuelViewType.WaitFrame)
+            {
+                DuelViewType vt = (DuelViewType)id;
+                // Different events carry the card's uniqueId in different params: Run/Cutin summon+set use p2;
+                // Card* (move/set/vanish/break) use the low 9 bits of p1. Resolve it to show cid/loc/player.
+                int uidCand = -1;
+                if (vt == DuelViewType.RunSummon || vt == DuelViewType.RunSpSummon ||
+                    vt == DuelViewType.CutinSummon || vt == DuelViewType.CutinSet)
+                    uidCand = param2;
+                else if (vt == DuelViewType.CardMove || vt == DuelViewType.CardSet ||
+                         vt == DuelViewType.CardVanish || vt == DuelViewType.CardBreak)
+                    uidCand = param1 & 0x1ff;
+                string extra = "";
+                if (uidCand > 0)
+                {
+                    IntPtr buf = Marshal.AllocHGlobal(64);
+                    try
+                    {
+                        int pl, loc, ix;
+                        if (CardBasicValByUid(uidCand, buf, out pl, out loc, out ix))
+                            extra = " => uid=" + uidCand + " cid=" + (ushort)Marshal.ReadInt16(buf, 0) + " loc=" + loc + " player=" + pl;
+                    }
+                    finally { Marshal.FreeHGlobal(buf); }
+                }
+                Console.WriteLine("[rgeff] " + vt + " p1=" + param1 + " p2=" + param2 + " p3=" + param3 + extra);
+            }
+            // Relic event hooks ride the view bus (semantic, catches both sides). RunSummon/RunSpSummon carry
+            // the summoned card's uniqueId in param2; the card is already on the field at this point, so
+            // FireSummon resolves the full live state (incl. destination zone).
+            // Shared last-CardMove uid, refreshed before any per-hook dispatch so other events can reuse it.
+            if (id == (int)DuelViewType.CardMove) LastCardMoveUid = param1 & 0x1ff;
+            if (RoguelikeDuelHooks.Has("summon"))
+            {
+                try
+                {
+                    if (id == (int)DuelViewType.RunSummon) RoguelikeLua.FireSummon(param2, "normal");
+                    else if (id == (int)DuelViewType.RunSpSummon) RoguelikeLua.FireSummon(param2, "special");
+                }
+                catch (Exception ex) { Console.WriteLine("[hook] summon EX: " + ex.Message); }
+            }
+            if (RoguelikeDuelHooks.Has("set") && id == (int)DuelViewType.CardSet)
+            {
+                try { RoguelikeLua.FireSet(LastCardMoveUid); }
+                catch (Exception ex) { Console.WriteLine("[hook] set EX: " + ex.Message); }
+            }
             if (IsPvpDuel || IsPvpSpectator)
             {
                 DuelEmoteHelper.OnRunEffect((DuelViewType)id, param1, param2, param3);
@@ -611,9 +643,6 @@ namespace YgoMasterClient
 
         public static int DLL_DuelSysAct()
         {
-            // Relic event hooks: poll the intent bus on every tick (cheap no-op unless a summon hook is
-            // loaded). Catches both the human and the CPU.
-            PollIntentBus();
             // Solo duels don't reach the ActionsToRunInNextSysAct drain (it lives inside the PvP block
             // below), so drain it here for non-PvP. Runs on the duel thread (this SysAct tick).
             if (!IsPvpDuel && !IsPvpSpectator && ActionsToRunInNextSysAct.Count > 0)
