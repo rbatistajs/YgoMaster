@@ -54,15 +54,15 @@ namespace YgoMasterClient
             return atk != 0 || def != 0 || level != 0;
         }
 
-        // generic event fire (no return value) -- summon/set/... events. The hook runs to completion; select_card
-        // is callback-based, so a hook that raises a selection returns immediately and its callback fires later.
+        // generic event fire (no return value) -- summon/set/... events. Each hook runs as a coroutine so it can
+        // block on select_card (which yields until the player picks, then resumes the hook with the chosen card).
         public static void Fire(string name, DynValue ctx)
         {
             List<Entry> list;
             if (!_hooks.TryGetValue(name, out list)) return;
             for (int i = 0; i < list.Count; i++)
             {
-                try { RoguelikeLua.CallHook(list[i].Fn, ctx, list[i].Params); }
+                try { RoguelikeLua.CallCoroutine(list[i].Fn, ctx, list[i].Params); }
                 catch (Exception ex) { Console.WriteLine("[hook] " + name + " EX: " + ex.Message); }
             }
         }

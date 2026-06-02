@@ -26,6 +26,15 @@ namespace YgoMasterClient
         static Del_ValidateSelectConfirm ValidateSelectConfirm;
         const long RVA_ValidateSelectConfirm = 0x592bf0;
 
+        // FUN_180534bc0(ctx, player, cardId, p4): the engine's effect target-builder -- looks up cardId's handler
+        // and fills the shared list buffer (DAT_1811adc30) with its legal targets. We call it with Monster Reborn's
+        // cid to get the engine's real "can be Special Summoned from a GY" set (see CanReviveFromGrave).
+        delegate int Del_BuildSelectList(long ctx, long player, short cardId, int p4);
+        static Del_BuildSelectList BuildSelectList;
+        const long RVA_BuildSelectList = 0x534bc0;
+        const long RVA_SelectListBuf = 0x11adc30;   // *(libBase + this) = DAT_1811adc30, the list buffer
+        const int MonsterRebornCid = 4842;          // a generic GY-revive effect; its target set = revivable cards
+
         static bool _active;
         static bool _armed; static int _armPlayer;      // rgselnext: raise from the next Normal Summon
         static List<int[]> _cands;                      // candidate slots: { player, location, index }
@@ -42,6 +51,28 @@ namespace YgoMasterClient
         public static void Init(IntPtr lib)
         {
             ValidateSelectConfirm = Utils.GetFunc<Del_ValidateSelectConfirm>((IntPtr)(lib.ToInt64() + RVA_ValidateSelectConfirm));
+            BuildSelectList = Utils.GetFunc<Del_BuildSelectList>((IntPtr)(lib.ToInt64() + RVA_BuildSelectList));
+        }
+
+        // True if the card with this uid can be Special Summoned from a graveyard, per the engine's real legality:
+        // run Monster Reborn's (cid 4842) own target builder and check whether the uid is in the legal set -- so it
+        // respects properly-summoned, "cannot be Special Summoned", etc. MUST run during active resolution (a hook).
+        // The build clears/refills the shared list buffer, but that's transient (the engine rebuilds it when a
+        // selection is actually raised).
+        public static bool CanReviveFromGrave(int uid)
+        {
+            IntPtr lib = DuelDll.DuelLibBase;
+            if (BuildSelectList == null || lib == IntPtr.Zero) return false;
+            IntPtr buf = Marshal.ReadIntPtr((IntPtr)(lib.ToInt64() + RVA_SelectListBuf));
+            if (buf == IntPtr.Zero) return false;
+            int n = BuildSelectList(0, DuelDll.MyID & 1, (short)MonsterRebornCid, 0);
+            long bb = buf.ToInt64();
+            for (int i = 0; i < n; i++)
+            {
+                int pos = (Marshal.ReadInt32((IntPtr)(bb + 0x18 + (long)i * 4)) >> 16) & 0xffff;
+                if ((pos & 1) + ((pos >> 8) * 2) == uid) return true;
+            }
+            return false;
         }
 
         // rgselnext: arm the selection to be raised from the next Normal Summon's resolution (active loop).
@@ -67,9 +98,12 @@ namespace YgoMasterClient
                         if (cands[i][0] == p && cands[i][1] == location) return 0x1000u;
                     return 0u;
                 }
-                int slot = index - 1;                                           // specific slot (1-based -> 0-based)
+                int slot = index - 1;
+
                 for (int i = 0; i < cands.Count; i++)
+                {
                     if (cands[i][0] == p && cands[i][1] == location && cands[i][2] == slot) return 0x1000u;
+                }
                 return 0u;
             }
             catch { return 0; }
@@ -133,8 +167,12 @@ namespace YgoMasterClient
             int player = Marshal.ReadInt32((IntPtr)(b + 0x3d04));
             int location = Marshal.ReadInt32((IntPtr)(b + 0x3d08));
             int rawIndex = Marshal.ReadInt32((IntPtr)(b + 0x3d0c));
-            if (rawIndex <= 0) return;                                                // not a real pick yet
-            int index = rawIndex - 1;
+            // Index convention for the pick is location-aware: piles browsed via an "open the list" modal
+            // (GY/deck/extra/banish) reserve 0x3d0c == 0 as the "open list" sentinel, so their picks are 1-based;
+            // the hand (clicked directly) reports the raw 0-based slot (0 is a valid pick).
+            bool oneBased = location != (int)CardPos.Hand;
+            if (oneBased ? rawIndex <= 0 : rawIndex < 0) return;                      // skip non-picks
+            int index = oneBased ? rawIndex - 1 : rawIndex;
             _active = false;
             Action<int, int, int> cb = _onConfirm; _onConfirm = null; _cands = null;
             try { if (cb != null) cb(player, location, index); }

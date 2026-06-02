@@ -977,7 +977,7 @@ namespace YgoMasterClient
                         {
                             RoguelikeCardProps.Props cpp;
                             if (RoguelikeCardProps.TryGet(cpcid, out cpp))
-                                Console.WriteLine("[rgcardprops] cid=" + cpp.Cid + " subType=" + cpp.SubType + " frame=" + cpp.Frame + " kind=" + cpp.Kind + " icon=" + cpp.Icon + " race=" + cpp.Race + " attr=" + cpp.Attr + " level=" + cpp.Level + " atk=" + cpp.Atk + " def=" + cpp.Def);
+                                Console.WriteLine("[rgcardprops] cid=" + cpp.Cid + " type=" + cpp.Type + " frame=" + cpp.Frame + " kind=" + cpp.Kind + " icon=" + cpp.Icon + " race=" + cpp.Race + " attr=" + cpp.Attr + " level=" + cpp.Level + " atk=" + cpp.Atk + " def=" + cpp.Def);
                             else
                                 Console.WriteLine("[rgcardprops] cid " + cpcid + " not found in game card data");
                         }

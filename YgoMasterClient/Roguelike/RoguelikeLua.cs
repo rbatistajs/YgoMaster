@@ -32,7 +32,8 @@ namespace YgoMasterClient
                 try
                 {
                     try { Console.SetOut(TextWriter.Null); Console.SetError(TextWriter.Null); } catch { }
-                    s = new Script(CoreModules.Preset_HardSandbox);   // no io/os/require
+                    // +Coroutine: select_card yields the running hook (a coroutine) until the player picks.
+                    s = new Script(CoreModules.Preset_HardSandbox | CoreModules.Coroutine);   // no io/os/require
                 }
                 finally
                 {
@@ -40,6 +41,16 @@ namespace YgoMasterClient
                 }
                 s.Options.ScriptLoader = new FileSystemScriptLoader();
                 RegisterApi(s);
+                // select_card is split: _select_begin (C#) builds the candidates + raises the selection, then the
+                // wrapper yields the running hook coroutine until the confirm resumes it with the chosen card.
+                // Lua-side coroutine.yield() is more reliable here than a CLR NewYieldReq.
+                s.DoString("function select_card(opts) if _select_begin(opts) then return coroutine.yield() end return nil end");
+                // Table helpers for scripts: merge (shallow map-merge of any number of tables, later keys win --
+                // e.g. defaults + overrides) and spread (concatenate their list/array parts in order). Tolerant of
+                // nil args via select('#').
+                s.DoString(
+                    "function merge(...) local r={} for i=1,select('#',...) do local t=select(i,...) if type(t)=='table' then for k,v in pairs(t) do r[k]=v end end end return r end " +
+                    "function spread(...) local r={} for i=1,select('#',...) do local t=select(i,...) if type(t)=='table' then for _,v in ipairs(t) do r[#r+1]=v end end end return r end");
                 _script = s;
             }
             return _script;
@@ -96,10 +107,10 @@ namespace YgoMasterClient
                 int uid = SlotUid(p, zone);
                 return uid <= 0 ? DynValue.Nil : DynValue.NewNumber(uid);
             });
-            s.Globals["hand_count"]   = (Func<int, int>)(p => ZoneCount(p, 0x0c));
-            s.Globals["deck_count"]   = (Func<int, int>)(p => ZoneCount(p, 0x10));
-            s.Globals["grave_count"]  = (Func<int, int>)(p => ZoneCount(p, 0x14));
-            s.Globals["extra_count"]  = (Func<int, int>)(p => ZoneCount(p, 0x18));
+            s.Globals["hand_count"] = (Func<int, int>)(p => ZoneCount(p, 0x0c));
+            s.Globals["deck_count"] = (Func<int, int>)(p => ZoneCount(p, 0x10));
+            s.Globals["grave_count"] = (Func<int, int>)(p => ZoneCount(p, 0x14));
+            s.Globals["extra_count"] = (Func<int, int>)(p => ZoneCount(p, 0x18));
             s.Globals["banish_count"] = (Func<int, int>)(p => ZoneCount(p, 0x1c));
             s.Globals["deck_top"] = (Func<int, DynValue>)(p =>
             {
@@ -110,12 +121,6 @@ namespace YgoMasterClient
             // on(name, fn): pin a callback to a hook. The params table active during the load is captured and
             // passed back as fn's 2nd arg on dispatch (see RoguelikeDuelHooks).
             s.Globals["on"] = (Action<string, DynValue>)((name, fn) => RoguelikeDuelHooks.Register(name, fn));
-            // special_summon(player, from, index): begin a special summon of source[index] for player. from =
-            // "deck"/"grave"/"hand"/"extra"/"banish"; index 0 = top. MUST be called from inside a hook (active
-            // resolution) -- the placement only pumps while the duel loop is live. The zone is chosen by the
-            // owner (UI for the player, AI for the cpu). face/mode default 0 for now. Returns true if queued.
-            // All card actions take a single card table { player_id, location, index } -- the same shape
-            // select_card / card_state return, so a chosen card passes straight through, and a manual call is
             // self-documenting: special_summon({ player_id = 0, location = "deck", index = 0 }). Optional summon
             // options (defaults match a plain face-up attack SS, so a passed-through card just works): face (1
             // face-up [default], 0 face-down), turn (0 attack [default], 1 defense -- the atk/def rotation),
@@ -130,10 +135,19 @@ namespace YgoMasterClient
                 int reason = OptInt(t, "reason", 0);
                 return DuelDll.QueueSpecialSummon(player, loc, index, face, turn, reason);
             });
-            s.Globals["to_hand"]  = (Action<DynValue>)(card => CardDebugCmd(card, 6));   // -> hand
+            // allow_special_summon_from_grave(card): true if `card` (a GY card table) can be Special Summoned by a
+            // revive, per the engine's real legality -- it runs Monster Reborn's target builder, so it respects
+            // properly-summoned / "cannot be Special Summoned" / etc. Meant for a select_card filter.
+            s.Globals["allow_special_summon_from_grave"] = (Func<DynValue, bool>)(cardv =>
+            {
+                if (cardv == null || cardv.Type != DataType.Table) return false;
+                DynValue uidv = cardv.Table.Get("uid");
+                return uidv.Type == DataType.Number && RoguelikeCardSelect.CanReviveFromGrave((int)uidv.Number);
+            });
+            s.Globals["to_hand"] = (Action<DynValue>)(card => CardDebugCmd(card, 6));   // -> hand
             s.Globals["to_grave"] = (Action<DynValue>)(card => CardDebugCmd(card, 8));   // -> graveyard
-            s.Globals["banish"]   = (Action<DynValue>)(card => CardDebugCmd(card, 9));   // banish face-up
-            s.Globals["destroy"]  = (Action<DynValue>)(card => CardDebugCmd(card, 11));  // destroy -> grave
+            s.Globals["banish"] = (Action<DynValue>)(card => CardDebugCmd(card, 9));   // banish face-up
+            s.Globals["destroy"] = (Action<DynValue>)(card => CardDebugCmd(card, 11));  // destroy -> grave
             // debug_command{ player_id, location, index, cmd }: raw engine "swiss-army-knife"
             // (DLL_DuelComDoDebugCommand). Low-level escape hatch -- nicer per-cmd aliases (to_grave, draw, ...)
             // come later. Takes the same card table as the other actions plus cmd, so a chosen card passes
@@ -171,13 +185,14 @@ namespace YgoMasterClient
                 DuelDll.QueueRunEffect(0x48, player & 1, 0, 0);
                 DuelDll.QueueRunEffect(0x23, player & 1, cid, 0);
             });
-            // select_card(opts, callback): raise a card selection; when the player confirms, callback(card) is
-            // invoked with the chosen card table. Callback-based (NOT a coroutine) -- the hook runs to completion
-            // immediately and the callback fires later from the confirm, so nothing re-enters Lua while a
-            // coroutine is suspended (that broke MoonSharp). opts = { from = "grave" (or a list), filter =
-            // function(card)->bool, player = who picks (default you) }. Returns true if a selection was raised
-            // (>=1 valid candidate), false if none.
-            s.Globals["select_card"] = (Func<DynValue, DynValue, bool>)((optsv, cbv) =>
+            // _select_begin(opts): internal half of select_card (the yielding Lua wrapper is set up in Engine()).
+            // Builds the filtered candidate set and raises the selection; returns true if one was raised (>=1
+            // candidate), false if none -- the wrapper yields the running hook coroutine on true, or returns nil
+            // on false (the gate that avoids a stuck picker with nothing valid). The Lua `filter` runs HERE during
+            // the build, before the coroutine yields, never from the native predicate -- so nothing re-enters Lua
+            // while the hook is suspended. opts = { from = "grave" (or a list), filter = function(card)->bool,
+            // player = who picks (default you) }.
+            s.Globals["_select_begin"] = (Func<DynValue, bool>)(optsv =>
             {
                 Table opts = (optsv != null && optsv.Type == DataType.Table) ? optsv.Table : null;
                 HashSet<int> fromSet = new HashSet<int>();
@@ -218,30 +233,40 @@ namespace YgoMasterClient
                                 candidates.Add(new int[] { pl, loc, idx });
                     }
                 if (candidates.Count == 0) return false;
-                _pendingCallback = (cbv != null && cbv.Type == DataType.Function) ? cbv : null;
                 RoguelikeCardSelect.QueueSelect(selector, candidates, OnSelectConfirmed);
                 return true;
             });
         }
 
-        // pending select_card callback, fired when the player confirms (nil if select_card was called w/o one).
-        static DynValue _pendingCallback;
+        // The hook coroutine, suspended on a select_card until the player confirms (null if none pending).
+        static DynValue _pendingCoroutine;
 
-        // Run a hook callback to completion. select_card is callback-based, so no coroutine is needed.
-        public static void CallHook(DynValue fn, DynValue ctx, DynValue prm)
+        // Run a hook callback as a coroutine so it can yield on select_card (the wrapper does coroutine.yield()).
+        // If it suspends, hold it for resume on confirm; if it ran to completion (no select_card), drop it.
+        public static void CallCoroutine(DynValue fn, DynValue ctx, DynValue prm)
         {
-            try { Engine().Call(fn, ctx ?? DynValue.Nil, prm ?? DynValue.Nil); }
+            try
+            {
+                DynValue co = Engine().CreateCoroutine(fn);
+                co.Coroutine.Resume(ctx ?? DynValue.Nil, prm ?? DynValue.Nil);
+                _pendingCoroutine = co.Coroutine.State == CoroutineState.Suspended ? co : null;
+            }
             catch (Exception ex) { Console.WriteLine("[hook] EX: " + ex.Message); }
         }
 
-        // DuelDll's selection onConfirm: resolve the chosen card and invoke the pending select_card callback.
+        // RoguelikeCardSelect's onConfirm: resume the suspended hook coroutine with the chosen card, so the Lua
+        // select_card(...) returns it. If that resume hits another select_card it re-suspends -- keep holding it.
         public static void OnSelectConfirmed(int player, int location, int index)
         {
-            DynValue cb = _pendingCallback; _pendingCallback = null;
-            if (cb == null) return;
+            DynValue co = _pendingCoroutine; _pendingCoroutine = null;
+            if (co == null) return;
             Table card = PileCard(player, location, index);
-            try { Engine().Call(cb, card == null ? DynValue.Nil : DynValue.NewTable(card)); }
-            catch (Exception ex) { Console.WriteLine("[select] callback EX: " + ex.Message); }
+            try
+            {
+                co.Coroutine.Resume(card == null ? DynValue.Nil : DynValue.NewTable(card));
+                if (co.Coroutine.State == CoroutineState.Suspended) _pendingCoroutine = co;
+            }
+            catch (Exception ex) { Console.WriteLine("[select] resume EX: " + ex.Message); }
         }
 
         // card count of an off-field pile (by location code), from the per-player zone counters.
@@ -346,13 +371,13 @@ namespace YgoMasterClient
             return -1;
         }
 
-        // Lua table from static card props (cid/race/attr/level/atk/def + subtype/frame/kind/icon).
+        // Lua table from static card props (cid/race/attr/level/atk/def + type/frame/kind/icon).
         static Table PropsTable(Script s, RoguelikeCardProps.Props p)
         {
             Table t = new Table(s);
             t["cid"] = p.Cid; t["race"] = p.Race; t["attr"] = p.Attr; t["level"] = p.Level;
             t["atk"] = p.Atk; t["def"] = p.Def;
-            t["subtype"] = p.SubType; t["frame"] = p.Frame; t["kind"] = p.Kind; t["icon"] = p.Icon;
+            t["type"] = p.Type; t["frame"] = p.Frame; t["kind"] = p.Kind; t["icon"] = p.Icon;
             return t;
         }
 
@@ -386,7 +411,7 @@ namespace YgoMasterClient
         // Per-card field buff query, called from the DuelGetFieldCardVal hook. The ctx carries only the LIVE
         // instance values (race/attr/level/atk/def come straight from outVal -- already altered by any in-duel
         // effect, e.g. DNA Surgery), plus cid/uid/zone and the owner (player_id 0/1 + player_type
-        // "player"/"cpu"). The static category (subtype/frame/kind/icon) is NOT here; scripts pull it with
+        // "player"/"cpu"). The static category (type/frame/kind/icon) is NOT here; scripts pull it with
         // card_props(c.cid). Then asks the "buff" hooks for the summed deltas.
         public static bool EvalFieldBuff(int cid, int race, int attr, int level, int atk, int def, int zone, int player, bool mine,
                                          out int datk, out int ddef, out int dlevel)
