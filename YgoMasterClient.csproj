@@ -71,6 +71,7 @@
     <Compile Include="YgoMasterClient\Roguelike\RoguelikeApi.cs" />
     <Compile Include="YgoMasterClient\Roguelike\RoguelikeCardProps.cs" />
     <Compile Include="YgoMasterClient\Roguelike\RoguelikeLua.cs" />
+    <Compile Include="YgoMasterClient\Roguelike\RoguelikeCardSelect.cs" />
     <Compile Include="YgoMasterClient\Roguelike\RoguelikeDuelHooks.cs" />
     <Compile Include="YgoMasterClient\Roguelike\RoguelikeStatAnim.cs" />
     <Compile Include="YgoMasterClient\Roguelike\Actions\RoguelikeActionDriver.cs" />

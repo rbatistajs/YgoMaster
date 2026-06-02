@@ -1005,6 +1005,18 @@ namespace YgoMasterClient
                         else Console.WriteLine("[rgdbg] usage: rgdbg <player> <location> <index> <cmd>   (deck->grave: rgdbg 0 15 0 8)");
                     }
                     break;
+                case "rgsel":// dev: raise a card selection (Phase 1: pick any card in a GY) and log the chosen (player,location,index). Usage: rgsel [player]
+                    {
+                        int selp; if (!(splitted.Length > 1 && int.TryParse(splitted[1], out selp))) selp = 0;
+                        RoguelikeCardSelect.QueueBeginSelect(selp);
+                    }
+                    break;
+                case "rgselnext":// dev: arm the selection to be raised from the next Normal Summon's resolution (active loop). Usage: rgselnext [player]
+                    {
+                        int selnp; if (!(splitted.Length > 1 && int.TryParse(splitted[1], out selnp))) selnp = 0;
+                        RoguelikeCardSelect.ArmNext(selnp);
+                    }
+                    break;
                 case "rgrun":// dev: queue a view-event dispatch (DuelViewType cutin/animation). Usage: rgrun <id|0xNN> <p1> <p2> <p3> (CutinActivate: rgrun 0x48 0 <cid> 0)
                     {
                         int rid = 0; string ridStr = splitted.Length > 1 ? splitted[1] : "";

@@ -15,6 +15,19 @@ using YgoMaster.Net.Message;
 
 namespace YgoMasterClient
 {
+    // Engine card "position"/location codes: the location reported by CardBasicValByUid and the position arg
+    // of DLL_DuelComDoDebugCommand / begin-SS. 0-12 are on-field zones (Master Duel master-rule board; Goat
+    // only uses M1-M5/S1-S5/Field), 13-17 the off-field piles. Member names double as the Lua location names
+    // (lowercased): m1..m5, emz1/emz2, s1..s5, field, hand, extra, deck, grave, banish.
+    enum CardPos
+    {
+        M1 = 0, M2 = 1, M3 = 2, M4 = 3, M5 = 4,      // main monster zones
+        EMZ1 = 5, EMZ2 = 6,                           // extra monster zones (unused in Goat)
+        S1 = 7, S2 = 8, S3 = 9, S4 = 10, S5 = 11,    // spell/trap zones
+        Field = 12,                                   // field spell zone
+        Hand = 13, Extra = 14, Deck = 15, Grave = 16, Banish = 17,
+    }
+
     unsafe static partial class DuelDll
     {
         public static List<byte> ReplayData = new List<byte>();
@@ -169,9 +182,10 @@ namespace YgoMasterClient
         // Begin a special summon (FUN_180625c00, RVA 0x625c00): fills the desc (op=4) and starts the placement
         // state machine. Must run during active resolution (a hook context) -- the placement only pumps while
         // the duel loop is live; injected from idle it stalls. The zone prompt is answered by the UI (player)
-        // / the AI (cpu). Signature: (player, cardRef*, face, mode, (cid<<16)|flagsLow, reason); cardRef points
-        // at the 4-byte [cid, state] zone entry.
-        delegate void Del_Func625c00(ushort player, IntPtr cardRef, ushort face, ushort mode, uint param5, ushort reason);
+        // / the AI (cpu). Signature: (player, cardRef*, face, turn, (cid<<16)|flagsLow, reason); cardRef points
+        // at the 4-byte [cid, state] zone entry. face: 1=face-up, 0=face-down. turn: the atk/def rotation,
+        // 0=attack, 1=defense. reason: engine reason code (pass-through).
+        delegate void Del_Func625c00(ushort player, IntPtr cardRef, ushort face, ushort turn, uint param5, ushort reason);
         static Del_Func625c00 Func_625c00;
         const long RVA_Func625c00 = 0x625c00;
 
@@ -190,8 +204,10 @@ namespace YgoMasterClient
         }
 
         // Queue a special summon of (player, location, index) on the duel thread. location codes per
-        // SpecialSummonSourceBase; index 0 = top. Returns false if there's no card there / not bound.
-        public static bool QueueSpecialSummon(int player, int location, int index, int face, int mode, int reason)
+        // SpecialSummonSourceBase; index 0 = top. face: 1=face-up, 0=face-down. turn: the atk/def rotation,
+        // 0=attack, 1=defense. reason: engine reason code (pass-through). Returns false if there's no card
+        // there / not bound.
+        public static bool QueueSpecialSummon(int player, int location, int index, int face, int turn, int reason)
         {
             if (Func_625c00 == null || _duelLibBase == IntPtr.Zero) return false;
             long baseOff = SpecialSummonSourceBase(location);
@@ -202,7 +218,7 @@ namespace YgoMasterClient
             int cid = (ushort)Marshal.ReadInt16((IntPtr)entryAddr);
             if (cid == 0) return false;
             lock (ActionsToRunInNextSysAct)
-                ActionsToRunInNextSysAct.Add(() => Func_625c00((ushort)player, (IntPtr)entryAddr, (ushort)face, (ushort)mode, (uint)cid << 16, (ushort)reason));
+                ActionsToRunInNextSysAct.Add(() => Func_625c00((ushort)player, (IntPtr)entryAddr, (ushort)face, (ushort)turn, (uint)cid << 16, (ushort)reason));
             return true;
         }
 
@@ -278,6 +294,7 @@ namespace YgoMasterClient
             Func_ResolveUid = Utils.GetFunc<Del_ResolveUid>((IntPtr)(lib.ToInt64() + RVA_ResolveUid));
             Func_DuelGetCardBasicVal = Utils.GetFunc<Del_DuelGetCardBasicVal>(PInvoke.GetProcAddress(lib, "DLL_DuelGetCardBasicVal"));
             Func_625c00 = Utils.GetFunc<Del_Func625c00>((IntPtr)(lib.ToInt64() + RVA_Func625c00));
+            RoguelikeCardSelect.Init(lib);
         }
 
         static void Log(string str)
@@ -651,6 +668,8 @@ namespace YgoMasterClient
                 try { RoguelikeLua.FireSet(LastCardMoveUid); }
                 catch (Exception ex) { Console.WriteLine("[hook] set EX: " + ex.Message); }
             }
+            // dev (rgselnext): raise the card selection from inside a real summon's resolution (active loop).
+            if (id == (int)DuelViewType.RunSummon) RoguelikeCardSelect.OnSummonResolved();
             if (IsPvpDuel || IsPvpSpectator)
             {
                 DuelEmoteHelper.OnRunEffect((DuelViewType)id, param1, param2, param3);
@@ -704,6 +723,7 @@ namespace YgoMasterClient
 
         public static int DLL_DuelSysAct()
         {
+            RoguelikeCardSelect.PollSelect();   // read a raised card selection once confirmed
             // Solo duels don't reach the ActionsToRunInNextSysAct drain (it lives inside the PvP block
             // below), so drain it here for non-PvP. Runs on the duel thread (this SysAct tick).
             if (!IsPvpDuel && !IsPvpSpectator && ActionsToRunInNextSysAct.Count > 0)
