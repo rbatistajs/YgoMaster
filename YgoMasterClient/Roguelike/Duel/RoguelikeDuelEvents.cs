@@ -32,6 +32,21 @@ namespace YgoMasterClient
             else if (viewId == (int)DuelViewType.CardBreak) Resolve(uid, "failed");
         }
 
+        // Turn-change event: fire on("turn", { player_id, player_type }) so scripts can reset per-turn state
+        // ("until end of turn"). param1 of a TurnChange view = the player whose turn is starting; prev turn ended.
+        public static void OnTurn(int turnPlayer)
+        {
+            if (!RoguelikeDuelHooks.Has("turn")) return;
+            RoguelikeDuelHooks.Fire("turn", DynValue.NewTable(RoguelikeLua.BuildTurnState(turnPlayer)));
+        }
+
+        // Phase-change event: fire on("phase", { phase }). A PhaseChange view's param1 = the new DuelPhase (0-5).
+        public static void OnPhase(int phase)
+        {
+            if (!RoguelikeDuelHooks.Has("phase")) return;
+            RoguelikeDuelHooks.Fire("phase", DynValue.NewTable(RoguelikeLua.BuildPhaseState(phase)));
+        }
+
         static void Start(string hook, int uid) { _pending[uid] = hook; Fire(hook, uid, "init"); }
 
         static void Resolve(int uid, string status)

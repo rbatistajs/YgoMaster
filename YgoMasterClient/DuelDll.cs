@@ -766,6 +766,19 @@ namespace YgoMasterClient
                 try { RoguelikeDuelEvents.OnViewEvent(id, id == (int)DuelViewType.CardSet ? LastCardMoveUid : param2); }
                 catch (Exception ex) { Console.WriteLine("[hook] lifecycle EX: " + ex.Message); }
             }
+            // Turn-change event: param1 = the player whose turn is starting. Fires on("turn", player) for per-turn
+            // state resets ("until end of turn" effects). Kept outside Wants() since it's its own hook name.
+            if (id == (int)DuelViewType.TurnChange)
+            {
+                try { RoguelikeDuelEvents.OnTurn(param1); }
+                catch (Exception ex) { Console.WriteLine("[hook] turn EX: " + ex.Message); }
+            }
+            // Phase-change event: param1 = the new DuelPhase. Fires on("phase", { phase }).
+            if (id == (int)DuelViewType.PhaseChange)
+            {
+                try { RoguelikeDuelEvents.OnPhase(param1); }
+                catch (Exception ex) { Console.WriteLine("[hook] phase EX: " + ex.Message); }
+            }
             // dev (rgselnext): raise the card selection from inside a real summon's resolution (active loop).
             if (id == (int)DuelViewType.RunSummon) RoguelikeCardSelect.OnSummonResolved();
             // chain_effect: run the registered Lua callbacks at a forged blank chain's two phases -- cost at

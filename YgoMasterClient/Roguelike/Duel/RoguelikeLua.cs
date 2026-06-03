@@ -132,6 +132,7 @@ namespace YgoMasterClient
             RegisterEnumNames(s, "CardKind", typeof(CardKind));
             RegisterEnumNames(s, "CardIcon", typeof(CardIcon));
             RegisterEnumNames(s, "CardSimpleKind", typeof(CardSimpleKind));
+            RegisterEnumNames(s, "DuelPhase", typeof(DuelPhase));   // Draw/Standby/Main1/Battle/Main2/End -- the on("phase") values
             s.Globals["hand_count"] = (Func<int, int>)(p => ZoneCount(p, 0x0c));
             s.Globals["deck_count"] = (Func<int, int>)(p => ZoneCount(p, 0x10));
             s.Globals["grave_count"] = (Func<int, int>)(p => ZoneCount(p, 0x14));
@@ -500,6 +501,23 @@ namespace YgoMasterClient
                 return t;
             }
             finally { Marshal.FreeHGlobal(buf); }
+        }
+
+        // Lua table for the turn event: { player_id, player_type } for the player whose turn is starting.
+        public static Table BuildTurnState(int player)
+        {
+            Table t = new Table(Engine());
+            t["player_id"] = player & 1;
+            t["player_type"] = (player & 1) == DuelDll.MyID ? "player" : "cpu";
+            return t;
+        }
+
+        // Lua table for the phase event: { phase } = the new DuelPhase name (Draw/Standby/Main1/Battle/Main2/End).
+        public static Table BuildPhaseState(int phase)
+        {
+            Table t = new Table(Engine());
+            t["phase"] = ((DuelPhase)phase).ToString();
+            return t;
         }
 
         // dev: load a hook script with a params table (JSON), registering its on(...) callbacks.
