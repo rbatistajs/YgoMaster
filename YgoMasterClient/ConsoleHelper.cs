@@ -35,6 +35,14 @@ namespace YgoMasterClient
             }).Start();
         }
 
+        // Parse a uint that may be decimal or 0x-prefixed hex (for dev commands).
+        static bool TryParseU(string s, out uint v)
+        {
+            if (s != null && (s.StartsWith("0x") || s.StartsWith("0X")))
+                return uint.TryParse(s.Substring(2), System.Globalization.NumberStyles.HexNumber, null, out v);
+            return uint.TryParse(s, out v);
+        }
+
         unsafe static void HandleCommand(string consoleInput)
         {
             string[] splitted = consoleInput.Split();
@@ -1031,6 +1039,53 @@ namespace YgoMasterClient
                             Console.WriteLine("[rgrun] queued id=" + rid + " p1=" + rp1 + " p2=" + rp2 + " p3=" + rp3);
                         }
                         else Console.WriteLine("[rgrun] usage: rgrun <id|0xNN> <p1> <p2> <p3>   (CutinActivate: rgrun 0x48 0 <cid> 0)");
+                    }
+                    break;
+                case "rgactlog":// dev: toggle activation logging -- [rgchain] push (FUN_180163050) + [rgcast] activate (FUN_180163d60) + [rgcmd] player commands. Usage: rgactlog [on|off]
+                    DuelDll.SetActLog(!(splitted.Length > 1 && splitted[1] == "off"));
+                    break;
+                case "rgcmd":// dev: issue a raw player command (DLL_DuelComDoCommand) -- mainly to confirm/pump an activation (cmd 12). Usage: rgcmd <player> <pos> <index> <cmd>
+                    {
+                        int cp, cpos, cidx, ccmd;
+                        if (splitted.Length == 5 && int.TryParse(splitted[1], out cp) && int.TryParse(splitted[2], out cpos)
+                            && int.TryParse(splitted[3], out cidx) && int.TryParse(splitted[4], out ccmd))
+                        {
+                            DuelDll.QueueDoCommand(cp, cpos, cidx, ccmd);
+                            Console.WriteLine("[rgcmd] queued player=" + cp + " pos=" + cpos + " index=" + cidx + " cmd=" + ccmd);
+                        }
+                        else Console.WriteLine("[rgcmd] usage: rgcmd <player> <pos> <index> <cmd>   (capture via rgactlog)");
+                    }
+                    break;
+                case "rgpile":// dev: list a pile's cards (index, cid, uid). Usage: rgpile <player> <location>  (13 hand, 14 extra, 15 deck, 16 grave, 17 banish)
+                    {
+                        int pp, pl;
+                        if (splitted.Length == 3 && int.TryParse(splitted[1], out pp) && int.TryParse(splitted[2], out pl))
+                            Console.WriteLine("[rgpile] player=" + pp + " loc=" + pl + ": " + DuelDll.ListPile(pp, pl));
+                        else Console.WriteLine("[rgpile] usage: rgpile <player> <location>   (13 hand, 14 extra, 15 deck, 16 grave, 17 banish)");
+                    }
+                    break;
+                case "rguid":// dev: get the uid (and cid) of the field card at (player, zone). Usage: rguid <player> <zone>
+                    {
+                        int up, uz;
+                        if (splitted.Length == 3 && int.TryParse(splitted[1], out up) && int.TryParse(splitted[2], out uz))
+                        {
+                            int ucid; int uid = DuelDll.FieldUid(up, uz, out ucid);
+                            Console.WriteLine("[rguid] player=" + up + " zone=" + uz + " uid=" + uid + " (0x" + uid.ToString("x") + ") cid=" + ucid);
+                        }
+                        else Console.WriteLine("[rguid] usage: rguid <player> <zone>");
+                    }
+                    break;
+                case "rgcast":// dev: activate an effId directly (FUN_180163d60) -- real chain link, no cid change. Usage: rgcast <player> <category> <zone> <effId> <uid> [ctx]  (cat: 0 spell/trap, 2 pile, 3 monster; hex 0x.. ok)
+                    {
+                        int cp, cc, cz; uint ceff, cuid, cctx = 0;
+                        if (splitted.Length >= 6 && int.TryParse(splitted[1], out cp) && int.TryParse(splitted[2], out cc)
+                            && int.TryParse(splitted[3], out cz) && TryParseU(splitted[4], out ceff) && TryParseU(splitted[5], out cuid))
+                        {
+                            if (splitted.Length > 6) TryParseU(splitted[6], out cctx);
+                            DuelDll.QueueActivateEffect(cp, cc, cz, (int)ceff, cuid, (long)cctx);
+                            Console.WriteLine("[rgcast] queued player=" + cp + " cat=" + cc + " zone=" + cz + " effId=" + ceff + " uid=0x" + cuid.ToString("x") + " -> param1=0x" + DuelDll.BuildActivateParam(cp, cc, cz, (int)ceff).ToString("x"));
+                        }
+                        else Console.WriteLine("[rgcast] usage: rgcast <player> <category> <zone> <effId> <uid> [ctx]   (cat: 0 spell/trap, 2 pile, 3 monster; hex 0x.. ok)");
                     }
                     break;
                 case "clsdump":// dev: dump an IL2 class's methods to _tmp. Usage: clsdump <Namespace>.<Class> [assembly]

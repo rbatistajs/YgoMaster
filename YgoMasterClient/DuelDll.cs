@@ -189,6 +189,40 @@ namespace YgoMasterClient
         static Del_Func625c00 Func_625c00;
         const long RVA_Func625c00 = 0x625c00;
 
+        // The raw chain-link push (FUN_180163050, RVA 0x163050): nearly every chain link (field effect, hand
+        // spell/trap, trigger) is created here, so we hook it as the broad activation logger -- decoding the
+        // packed card descriptor (low16 = effId, bit31 = player, bits16-20 = zone/index). mode 1 = new main
+        // chain, 2 = sub-stack, 3 = added to an open chain.
+        delegate uint Del_ChainPush(int mode, uint cardDesc, uint p3, uint p4);
+        static Hook<Del_ChainPush> hookChainPush;
+        const long RVA_ChainPush = 0x163050;
+
+        // The activation entry (FUN_180163d60, RVA 0x163d60): receives the effId directly in param1's low16 -- the
+        // internal "activate this effId" call (scripts use it with literal effIds, e.g. FUN_180596670). We hook it
+        // to log a real activation's args when armed; QueueActivateEffect calls .Original to drive one ourselves.
+        delegate ulong Del_ActivateEffect(uint param_1, uint param_2, long param_3);
+        static Hook<Del_ActivateEffect> hookActivateEffect;
+        const long RVA_ActivateEffect = 0x163d60;
+
+        static bool _actLogArmed;
+        public static void SetActLog(bool on)
+        {
+            _actLogArmed = on;
+            Console.WriteLine("[rgactlog] " + (on ? "ON" : "off") + "  (push " + (hookChainPush != null ? "hooked" : "NULL") + ", activate " + (hookActivateEffect != null ? "hooked" : "NULL") + ")");
+        }
+        static uint ChainPushDetour(int mode, uint cardDesc, uint p3, uint p4)
+        {
+            if (_actLogArmed)
+                try { Console.WriteLine("[rgchain] push mode=" + mode + " effId=" + (cardDesc & 0xffff) + " player=" + (cardDesc >> 31) + " idx=" + ((cardDesc >> 16) & 0x1f) + " desc=0x" + cardDesc.ToString("x") + " p3=0x" + p3.ToString("x") + " p4=0x" + p4.ToString("x")); } catch { }
+            return hookChainPush.Original(mode, cardDesc, p3, p4);
+        }
+        static ulong ActivateEffectDetour(uint param_1, uint param_2, long param_3)
+        {
+            if (_actLogArmed)
+                try { Console.WriteLine("[rgcast] activate param1=0x" + param_1.ToString("x") + " (effId=" + (param_1 & 0xffff) + ") uid=0x" + param_2.ToString("x") + " ctx=0x" + param_3.ToString("x")); } catch { }
+            return hookActivateEffect.Original(param_1, param_2, param_3);
+        }
+
         // Entry-base (the [cid, state] start) per off-field pile, for the cardRef.
         static long SpecialSummonSourceBase(int location)
         {
@@ -243,6 +277,83 @@ namespace YgoMasterClient
                 ActionsToRunInNextSysAct.Add(() => originalRunEffect(id, p1, p2, p3));
         }
 
+        // dev (rgcast): activate an effId directly (FUN_180163d60) -- a real chain link with full resolution, no cid
+        // change. category matches the effId's type (0 spell/trap, 2 pile, 3 monster); zone = the carrier card's real
+        // zone (field 0-12) or pile location (13-17); uid = that card's uid (the source, independent of effId); ctx =
+        // 0 for a fresh top-level activation. Builds param1 = (player<<31)|(category<<21)|(zone<<16)|effId. Must run on
+        // the duel thread during the player's priority (the engine does validation / cost / target / resolution).
+        public static void QueueActivateEffect(int player, int category, int zone, int effId, uint uid, long ctx)
+        {
+            if (hookActivateEffect == null) return;
+            uint param1 = BuildActivateParam(player, category, zone, effId);
+            lock (ActionsToRunInNextSysAct)
+                ActionsToRunInNextSysAct.Add(() => hookActivateEffect.Original(param1, uid, ctx));
+        }
+
+        // param1 packing for an activation: (player<<31) | (category<<21) | (zone<<16) | effId(low16).
+        public static uint BuildActivateParam(int player, int category, int zone, int effId)
+        {
+            return ((uint)(player & 1) << 31) | (((uint)category & 7) << 21) | (((uint)zone & 0x1f) << 16) | ((uint)effId & 0xffff);
+        }
+
+        // dev (rgcmd): issue a raw player command (DLL_DuelComDoCommand) on the duel thread -- records (player,
+        // position, index, cmd) into the duelState; the sysact loop processes it like a real input. Used to confirm
+        // / pump an activation (cmd 12). Only valid when the engine is waiting for that command.
+        public static void QueueDoCommand(int player, int position, int index, int cmd)
+        {
+            if (hookDLL_DuelComDoCommand == null) return;
+            lock (ActionsToRunInNextSysAct)
+                ActionsToRunInNextSysAct.Add(() => hookDLL_DuelComDoCommand.Original(player, position, index, cmd));
+        }
+
+        // dev: list an off-field pile's cards (index, cid, uid) for a location 13-17 (hand/extra/deck/grave/banish).
+        // Each pile entry is 4 bytes [cid(low16), pos(high16)] at duelState + player*0xddc + base + (idx)*4; uid =
+        // (pos & 1) + (pos >> 8) * 2 (same as the field). Use it to get the uid of a GY card to activate via rgcast.
+        public static string ListPile(int player, int location)
+        {
+            long pbase, pcountOff;
+            switch (location)
+            {
+                case 13: pbase = 0x1e4; pcountOff = 0x0c; break;   // hand
+                case 14: pbase = 0x5a4; pcountOff = 0x18; break;   // extra
+                case 15: pbase = 0x3c4; pcountOff = 0x10; break;   // deck
+                case 16: pbase = 0x7fc; pcountOff = 0x14; break;   // grave
+                case 17: pbase = 0xa54; pcountOff = 0x1c; break;   // banish
+                default: return "(location must be 13-17)";
+            }
+            if (_duelLibBase == IntPtr.Zero) return "(no lib)";
+            IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
+            if (ds == IntPtr.Zero) return "(no duel)";
+            long b = ds.ToInt64();
+            int cnt = Marshal.ReadInt32((IntPtr)(b + (long)(player & 1) * 0xddc + pcountOff));
+            var sb = new System.Text.StringBuilder();
+            for (int idx = 0; idx < cnt; idx++)
+            {
+                int entry = Marshal.ReadInt32((IntPtr)(b + pbase + ((long)(player & 1) * 0x377 + idx) * 4));
+                int cid = entry & 0xffff;
+                if (cid == 0) continue;
+                int pos = (entry >> 16) & 0xffff;
+                sb.Append("[" + idx + "] cid=" + cid + " uid=" + ((pos & 1) + ((pos >> 8) * 2)) + "  ");
+            }
+            return sb.Length == 0 ? "(empty)" : sb.ToString();
+        }
+
+        // dev: the uid of the field card at (player, zone) -- the engine's own formula (DLL_DuelComDoCommand):
+        // uid = (s & 1) + (s >> 8) * 2, where s is the slot state word at duelState + player*0xddc + zone*0x1c +
+        // 0x5e. Also returns the slot cid (+0x5c). Returns -1 if unavailable. This is the param2 that FUN_180163d60
+        // expects (= duelState 0x3cf4 in a real activation).
+        public static int FieldUid(int player, int zone, out int cid)
+        {
+            cid = 0;
+            if (_duelLibBase == IntPtr.Zero) return -1;
+            IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
+            if (ds == IntPtr.Zero) return -1;
+            long slot = ds.ToInt64() + (long)(player & 1) * 0xddc + (long)zone * 0x1c;
+            cid = (ushort)Marshal.ReadInt16((IntPtr)(slot + 0x5c));
+            int s = (ushort)Marshal.ReadInt16((IntPtr)(slot + 0x5e));
+            return (s & 1) + ((s >> 8) * 2);
+        }
+
         delegate void Del_AddRecord(IntPtr ptr, int size);
         delegate void Del_DLL_SetAddRecordDelegate(Del_AddRecord addRecord);
         static Del_DLL_SetAddRecordDelegate DLL_SetAddRecordDelegate;
@@ -276,6 +387,8 @@ namespace YgoMasterClient
             hookDLL_SetEffectDelegate = new Hook<Del_DLL_SetEffectDelegate>(DLL_SetEffectDelegate, PInvoke.GetProcAddress(lib, "DLL_SetEffectDelegate"));
             hookDLL_DuelSysAct = new Hook<Del_DLL_DuelSysAct>(DLL_DuelSysAct, PInvoke.GetProcAddress(lib, "DLL_DuelSysAct"));
             hookDuelGetFieldCardVal = new Hook<Del_DuelGetFieldCardVal>(DuelGetFieldCardVal, (IntPtr)(lib.ToInt64() + RVA_DuelGetFieldCardVal));
+            hookChainPush = new Hook<Del_ChainPush>(ChainPushDetour, (IntPtr)(lib.ToInt64() + RVA_ChainPush));
+            hookActivateEffect = new Hook<Del_ActivateEffect>(ActivateEffectDetour, (IntPtr)(lib.ToInt64() + RVA_ActivateEffect));
 
             hookDLL_DuelComMovePhase = new Hook<Del_DLL_DuelComMovePhase>(DLL_DuelComMovePhase, PInvoke.GetProcAddress(lib, "DLL_DuelComMovePhase"));
             hookDLL_DuelComDoCommand = new Hook<Del_DLL_DuelComDoCommand>(DLL_DuelComDoCommand, PInvoke.GetProcAddress(lib, "DLL_DuelComDoCommand"));
@@ -960,6 +1073,8 @@ namespace YgoMasterClient
 
         public static void DLL_DuelComDoCommand(int player, int position, int index, int commandId)
         {
+            if (_actLogArmed)
+                try { Console.WriteLine("[rgcmd] DoCommand player=" + player + " pos=" + position + " index=" + index + " cmd=" + commandId); } catch { }
             if (IsPvpDuel)
             {
                 Log("DLL_DuelComDoCommand player:" + player + " pos:" + position + " indx:" + index + " cmd:" + commandId + " seq:" + RunEffectSeq);
