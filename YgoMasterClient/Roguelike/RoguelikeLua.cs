@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using MoonSharp.Interpreter;
 using MoonSharp.Interpreter.Loaders;
+using YgoMaster;   // DuelViewType
 
 namespace YgoMasterClient
 {
@@ -121,19 +122,20 @@ namespace YgoMasterClient
             // on(name, fn): pin a callback to a hook. The params table active during the load is captured and
             // passed back as fn's 2nd arg on dispatch (see RoguelikeDuelHooks).
             s.Globals["on"] = (Action<string, DynValue>)((name, fn) => RoguelikeDuelHooks.Register(name, fn));
-            // self-documenting: special_summon({ player_id = 0, location = "deck", index = 0 }). Optional summon
-            // options (defaults match a plain face-up attack SS, so a passed-through card just works): face (1
-            // face-up [default], 0 face-down), turn (0 attack [default], 1 defense -- the atk/def rotation),
-            // reason (engine reason code, default 0).
+            // self-documenting: special_summon({ player_id = 0, location = "deck", index = 0 }). The card table is the
+            // SOURCE (player_id = owner). Optional options (defaults match a plain face-up attack SS to your side, so
+            // a passed-through card just works): face (1 face-up [default], 0 face-down), turn (0 attack [default],
+            // 1 defense -- the atk/def rotation), reason (engine reason code, default 0), player_control (which side
+            // controls the summoned card, default you -- set to the opponent to give them the card; lets you steal an
+            // opponent's card to your field when its player_id is the opponent).
             s.Globals["special_summon"] = (Func<DynValue, bool>)(card =>
             {
-                int player, loc, index;
-                if (!CardSlot(card, out player, out loc, out index)) { Console.WriteLine("[lua] special_summon: needs { player_id, location, index }"); return false; }
+                if (!CardSlot(card, out int player, out int loc, out int index, out int control)) { Console.WriteLine("[lua] special_summon: needs { player_id, location, index }"); return false; }
                 Table t = card.Table;
                 int face = OptInt(t, "face", 1);
                 int turn = OptInt(t, "turn", 0);
                 int reason = OptInt(t, "reason", 0);
-                return DuelDll.QueueSpecialSummon(player, loc, index, face, turn, reason);
+                return DuelDll.QueueSpecialSummon(player, loc, index, face, turn, reason, control);
             });
             // allow_special_summon_from_grave(card): true if `card` (a GY card table) can be Special Summoned by a
             // revive, per the engine's real legality -- it runs Monster Reborn's target builder, so it respects
@@ -167,23 +169,35 @@ namespace YgoMasterClient
                 if (location < 0) { Console.WriteLine("[lua] debug_command: bad/missing location"); return; }
                 DuelDll.QueueDebugCommand(player, location, index, cmd);
             });
-            // run_effect(id, p1, p2, p3): raw view-event dispatch -- plays a DuelViewType cutin/animation
-            // without touching the real effect (low-level escape hatch). id = DuelViewType value (e.g. 0x48
-            // CutinActivate, 0x23 CardHappen). Must be called from inside a hook (active resolution).
-            s.Globals["run_effect"] = (Action<int, int, int, int>)((id, p1, p2, p3) => DuelDll.QueueRunEffect(id, p1, p2, p3));
+            // run_effect(id, p1, p2, p3): raw view-event dispatch -- plays a DuelViewType cutin/animation without
+            // touching the real effect (low-level escape hatch). id = a DuelViewType number OR its name as a string
+            // (e.g. 0x48 / "CutinActivate", 0x23 / "CardHappen"; case-insensitive). Must be called from inside a
+            // hook (active resolution).
+            s.Globals["run_effect"] = (Action<DynValue, int, int, int>)((idv, p1, p2, p3) =>
+            {
+                int id;
+                if (idv != null && idv.Type == DataType.Number) id = (int)idv.Number;
+                else
+                {
+                    if (idv == null || idv.Type != DataType.String || !Enum.TryParse(idv.String, true, out DuelViewType vt))
+                    { Console.WriteLine("[lua] run_effect: id must be a number or a DuelViewType name"); return; }
+                    id = (int)vt;
+                }
+                DuelDll.QueueRunEffect(id, p1, p2, p3);
+            });
             // effect_activate_zone(player, zone) / effect_activate_card(player, cid): play the "effect
             // activates" flash + a card highlight. ..._zone highlights the field monster at (player, zone);
             // ..._card pops the card art (cid) on the side (works even if it's not on the field). Both open the
             // activation cutin (CutinActivate) first, since the highlight (CardHappen) only renders inside it.
             s.Globals["effect_activate_zone"] = (Action<int, int>)((player, zone) =>
             {
-                DuelDll.QueueRunEffect(0x48, player & 1, 0, 0);
-                DuelDll.QueueRunEffect(0x23, (player & 1) + zone * 2, 0, 0);
+                DuelDll.QueueRunEffect((int)DuelViewType.CutinActivate, player & 1, 0, 0);
+                DuelDll.QueueRunEffect((int)DuelViewType.CardHappen, (player & 1) + zone * 2, 0, 0);
             });
             s.Globals["effect_activate_card"] = (Action<int, int>)((player, cid) =>
             {
-                DuelDll.QueueRunEffect(0x48, player & 1, 0, 0);
-                DuelDll.QueueRunEffect(0x23, player & 1, cid, 0);
+                DuelDll.QueueRunEffect((int)DuelViewType.CutinActivate, player & 1, 0, 0);
+                DuelDll.QueueRunEffect((int)DuelViewType.CardHappen, player & 1, cid, 0);
             });
             // _select_begin(opts): internal half of select_card (the yielding Lua wrapper is set up in Engine()).
             // Builds the filtered candidate set and raises the selection; returns true if one was raised (>=1
@@ -317,16 +331,22 @@ namespace YgoMasterClient
         }
 
         // Extract (player, location code, index) from a card table (select_card / card_state result).
-        static bool CardSlot(DynValue cardv, out int player, out int location, out int index)
+        static bool CardSlot(DynValue cardv, out int player, out int location, out int index, out int control)
         {
-            player = 0; location = -1; index = -1;
+            player = DuelDll.MyID; location = -1; index = -1; control = DuelDll.MyID;
             if (cardv == null || cardv.Type != DataType.Table) return false;
             Table t = cardv.Table;
-            DynValue p = t.Get("player_id"), l = t.Get("location"), i = t.Get("index");
+            DynValue p = t.Get("player_id"), l = t.Get("location"), i = t.Get("index"), c = t.Get("player_control");
             if (p.Type == DataType.Number) player = (int)p.Number;
             if (l.Type == DataType.String) location = LocationCode(l.String);
             if (i.Type == DataType.Number) index = (int)i.Number;
+            if (c.Type == DataType.Number) control = (int)c.Number;
             return location >= 0 && index >= 0;
+        }
+
+        static bool CardSlot(DynValue cardv, out int player, out int location, out int index)
+        {
+            return CardSlot(cardv, out player, out location, out index, out _);
         }
 
         // Readable string for log(): a table becomes { k=v, ... } (shallow -- nested tables show as table:ref);
@@ -355,8 +375,7 @@ namespace YgoMasterClient
         // Run a debug command on a card table's slot (to_hand/to_grave/banish/destroy helpers).
         static void CardDebugCmd(DynValue card, int cmd)
         {
-            int player, location, index;
-            if (!CardSlot(card, out player, out location, out index)) { Console.WriteLine("[lua] action: needs a card table"); return; }
+            if (!CardSlot(card, out int player, out int location, out int index)) { Console.WriteLine("[lua] action: needs a card table"); return; }
             DuelDll.QueueDebugCommand(player, location, index, cmd);
         }
 
@@ -365,8 +384,7 @@ namespace YgoMasterClient
         // -1 if unknown.
         static int LocationCode(string name)
         {
-            CardPos pos;
-            if (!string.IsNullOrEmpty(name) && Enum.TryParse(name, true, out pos) && Enum.IsDefined(typeof(CardPos), pos))
+            if (!string.IsNullOrEmpty(name) && Enum.TryParse(name, true, out CardPos pos) && Enum.IsDefined(typeof(CardPos), pos))
                 return (int)pos;
             return -1;
         }
@@ -437,8 +455,7 @@ namespace YgoMasterClient
             IntPtr buf = Marshal.AllocHGlobal(64);
             try
             {
-                int player, location, index;
-                if (!DuelDll.CardBasicValByUid(uid, buf, out player, out location, out index)) return null;
+                if (!DuelDll.CardBasicValByUid(uid, buf, out int player, out int location, out int index)) return null;
                 int cid = (ushort)Marshal.ReadInt16(buf, 0);
                 if (cid == 0) return null;
                 Table t = new Table(Engine());

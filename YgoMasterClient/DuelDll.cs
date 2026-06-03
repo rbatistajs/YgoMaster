@@ -203,22 +203,23 @@ namespace YgoMasterClient
             }
         }
 
-        // Queue a special summon of (player, location, index) on the duel thread. location codes per
-        // SpecialSummonSourceBase; index 0 = top. face: 1=face-up, 0=face-down. turn: the atk/def rotation,
-        // 0=attack, 1=defense. reason: engine reason code (pass-through). Returns false if there's no card
-        // there / not bound.
-        public static bool QueueSpecialSummon(int player, int location, int index, int face, int turn, int reason)
+        // Queue a special summon on the duel thread. The card is sourced from owner's pile (location codes per
+        // SpecialSummonSourceBase; index 0 = top) but summoned to toPlayer's side -- so an opponent-owned card can
+        // be Special Summoned to your field (like Monster Reborn reviving from either GY). face: 1=face-up,
+        // 0=face-down. turn: the atk/def rotation, 0=attack, 1=defense. reason: engine reason code (pass-through).
+        // Returns false if there's no card there / not bound.
+        public static bool QueueSpecialSummon(int owner, int location, int index, int face, int turn, int reason, int toPlayer)
         {
             if (Func_625c00 == null || _duelLibBase == IntPtr.Zero) return false;
             long baseOff = SpecialSummonSourceBase(location);
             if (baseOff < 0 || index < 0) return false;
             IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
             if (ds == IntPtr.Zero) return false;
-            long entryAddr = ds.ToInt64() + baseOff + ((long)(player & 1) * 0x377 + index) * 4;
+            long entryAddr = ds.ToInt64() + baseOff + ((long)(owner & 1) * 0x377 + index) * 4;   // source: owner's pile
             int cid = (ushort)Marshal.ReadInt16((IntPtr)entryAddr);
             if (cid == 0) return false;
-            lock (ActionsToRunInNextSysAct)
-                ActionsToRunInNextSysAct.Add(() => Func_625c00((ushort)player, (IntPtr)entryAddr, (ushort)face, (ushort)turn, (uint)cid << 16, (ushort)reason));
+            lock (ActionsToRunInNextSysAct)                                                       // dest controller: toPlayer
+                ActionsToRunInNextSysAct.Add(() => Func_625c00((ushort)(toPlayer & 1), (IntPtr)entryAddr, (ushort)face, (ushort)turn, (uint)cid << 16, (ushort)reason));
             return true;
         }
 

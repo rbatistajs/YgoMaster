@@ -150,7 +150,7 @@ namespace YgoMasterClient
                         cands.Add(new int[] { player & 1, 16, idx });   // location 16 = grave
             }
             if (cands.Count == 0) { Console.WriteLine("[rgsel] GY is empty -- fill it first (e.g. rgdbg " + (player & 1) + " 15 0 8 a few times)"); return; }
-            QueueSelect(player, cands, (p, loc, idx) => DuelDll.QueueSpecialSummon(p, loc, idx, 1, 0, 0));
+            QueueSelect(player, cands, (p, loc, idx) => DuelDll.QueueSpecialSummon(p, loc, idx, 1, 0, 0, player));
         }
 
         // Pumped from DuelDll.DuelSysAct: detect the confirm and fire onConfirm. 0x3d0c is 1-based (0 = no pick /
