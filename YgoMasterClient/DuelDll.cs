@@ -133,7 +133,6 @@ namespace YgoMasterClient
         // outVal layout (short*): [0]=cid, +4=eff ATK, +8=eff DEF, +12=base ATK, +16=base DEF.
         delegate void Del_DuelGetFieldCardVal(uint player, int zone, IntPtr outVal, uint flags, uint param5);
         static Hook<Del_DuelGetFieldCardVal> hookDuelGetFieldCardVal;
-        const long RVA_DuelGetFieldCardVal = 0xb0000;
         // FUN_1800b0000 recurses into itself (copy-stats / some card effects); buff only the outermost
         // call so our delta is not stacked once per nesting level.
         [ThreadStatic] static int _fieldCardValDepth;
@@ -148,7 +147,6 @@ namespace YgoMasterClient
         // path re-enters FUN_1800b0000.
         delegate uint Del_ResolveUid(uint uniqueId);
         static Del_ResolveUid Func_ResolveUid;
-        const long RVA_ResolveUid = 0x2b210;
         delegate void Del_DuelGetCardBasicVal(ulong player, int location, int index, IntPtr outVal);
         static Del_DuelGetCardBasicVal Func_DuelGetCardBasicVal;
         [ThreadStatic] static bool _inCardQuery;
@@ -174,9 +172,8 @@ namespace YgoMasterClient
         // / the AI (cpu). Signature: (player, cardRef*, face, turn, (cid<<16)|flagsLow, reason); cardRef points
         // at the 4-byte [cid, state] zone entry. face: 1=face-up, 0=face-down. turn: the atk/def rotation,
         // 0=attack, 1=defense. reason: engine reason code (pass-through).
-        delegate void Del_Func625c00(ushort player, IntPtr cardRef, ushort face, ushort turn, uint param5, ushort reason);
-        static Del_Func625c00 Func_625c00;
-        const long RVA_Func625c00 = 0x625c00;
+        delegate void Del_BeginSpecialSummon(ushort player, IntPtr cardRef, ushort face, ushort turn, uint param5, ushort reason);
+        static Del_BeginSpecialSummon Func_BeginSpecialSummon;
 
         // The raw chain-link push (FUN_180163050, RVA 0x163050): nearly every chain link (field effect, hand
         // spell/trap, trigger) is created here, so we hook it as the broad activation logger -- decoding the
@@ -184,14 +181,12 @@ namespace YgoMasterClient
         // chain, 2 = sub-stack, 3 = added to an open chain.
         delegate uint Del_ChainPush(int mode, uint cardDesc, uint p3, uint p4);
         static Hook<Del_ChainPush> hookChainPush;
-        const long RVA_ChainPush = 0x163050;
 
         // The activation entry (FUN_180163d60, RVA 0x163d60): receives the effId directly in param1's low16 -- the
         // internal "activate this effId" call (scripts use it with literal effIds, e.g. FUN_180596670). We hook it
         // to log a real activation's args when armed; QueueActivateEffect calls .Original to drive one ourselves.
         delegate ulong Del_ActivateEffect(uint param_1, uint param_2, long param_3);
         static Hook<Del_ActivateEffect> hookActivateEffect;
-        const long RVA_ActivateEffect = 0x163d60;
 
         static bool _actLogArmed;
         public static void SetActLog(bool on)
@@ -233,7 +228,7 @@ namespace YgoMasterClient
         // Returns false if there's no card there / not bound.
         public static bool QueueSpecialSummon(int owner, int location, int index, int face, int turn, int reason, int toPlayer)
         {
-            if (Func_625c00 == null || _duelLibBase == IntPtr.Zero) return false;
+            if (Func_BeginSpecialSummon == null || _duelLibBase == IntPtr.Zero) return false;
             long baseOff = SpecialSummonSourceBase(location);
             if (baseOff < 0 || index < 0) return false;
             IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
@@ -242,7 +237,7 @@ namespace YgoMasterClient
             int cid = (ushort)Marshal.ReadInt16((IntPtr)entryAddr);
             if (cid == 0) return false;
             lock (ActionsToRunInNextSysAct)                                                       // dest controller: toPlayer
-                ActionsToRunInNextSysAct.Add(() => Func_625c00((ushort)(toPlayer & 1), (IntPtr)entryAddr, (ushort)face, (ushort)turn, (uint)cid << 16, (ushort)reason));
+                ActionsToRunInNextSysAct.Add(() => Func_BeginSpecialSummon((ushort)(toPlayer & 1), (IntPtr)entryAddr, (ushort)face, (ushort)turn, (uint)cid << 16, (ushort)reason));
             return true;
         }
 
@@ -378,14 +373,15 @@ namespace YgoMasterClient
                 throw new Exception("Failed to load duel.dll");
             }
             _duelLibBase = lib;
+            DuelSig.Init(lib);   // snapshot .text so internal functions resolve by signature, not a hardcoded RVA
 
             InitProxyFunctions(lib);
 
             hookDLL_SetEffectDelegate = new Hook<Del_DLL_SetEffectDelegate>(DLL_SetEffectDelegate, PInvoke.GetProcAddress(lib, "DLL_SetEffectDelegate"));
             hookDLL_DuelSysAct = new Hook<Del_DLL_DuelSysAct>(DLL_DuelSysAct, PInvoke.GetProcAddress(lib, "DLL_DuelSysAct"));
-            hookDuelGetFieldCardVal = new Hook<Del_DuelGetFieldCardVal>(DuelGetFieldCardVal, (IntPtr)(lib.ToInt64() + RVA_DuelGetFieldCardVal));
-            hookChainPush = new Hook<Del_ChainPush>(ChainPushDetour, (IntPtr)(lib.ToInt64() + RVA_ChainPush));
-            hookActivateEffect = new Hook<Del_ActivateEffect>(ActivateEffectDetour, (IntPtr)(lib.ToInt64() + RVA_ActivateEffect));
+            hookDuelGetFieldCardVal = new Hook<Del_DuelGetFieldCardVal>(DuelGetFieldCardVal, DuelSig.Resolve("DuelGetFieldCardVal"));
+            hookChainPush = new Hook<Del_ChainPush>(ChainPushDetour, DuelSig.Resolve("ChainPush"));
+            hookActivateEffect = new Hook<Del_ActivateEffect>(ActivateEffectDetour, DuelSig.Resolve("ActivateEffect"));
 
             hookDLL_DuelComMovePhase = new Hook<Del_DLL_DuelComMovePhase>(DLL_DuelComMovePhase, PInvoke.GetProcAddress(lib, "DLL_DuelComMovePhase"));
             hookDLL_DuelComDoCommand = new Hook<Del_DLL_DuelComDoCommand>(DLL_DuelComDoCommand, PInvoke.GetProcAddress(lib, "DLL_DuelComDoCommand"));
@@ -402,9 +398,9 @@ namespace YgoMasterClient
 
             DLL_SetAddRecordDelegate = Utils.GetFunc<Del_DLL_SetAddRecordDelegate>(PInvoke.GetProcAddress(lib, "DLL_SetAddRecordDelegate"));
 
-            Func_ResolveUid = Utils.GetFunc<Del_ResolveUid>((IntPtr)(lib.ToInt64() + RVA_ResolveUid));
+            Func_ResolveUid = Utils.GetFunc<Del_ResolveUid>(DuelSig.Resolve("ResolveUid"));
             Func_DuelGetCardBasicVal = Utils.GetFunc<Del_DuelGetCardBasicVal>(PInvoke.GetProcAddress(lib, "DLL_DuelGetCardBasicVal"));
-            Func_625c00 = Utils.GetFunc<Del_Func625c00>((IntPtr)(lib.ToInt64() + RVA_Func625c00));
+            Func_BeginSpecialSummon = Utils.GetFunc<Del_BeginSpecialSummon>(DuelSig.Resolve("BeginSpecialSummon"));
             RoguelikeCardSelect.Init(lib);
         }
 

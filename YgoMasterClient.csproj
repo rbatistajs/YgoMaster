@@ -92,6 +92,7 @@
     <Compile Include="YgoMasterClient\TradeUtils.cs" />
     <Compile Include="YgoMasterClient\ClientSettings.Text.cs" />
     <Compile Include="YgoMasterClient\DuelDll.cs" />
+    <Compile Include="YgoMasterClient\DuelSig.cs" />
     <Compile Include="YgoMasterClient\ActionSheetViewController.cs" />
     <Compile Include="YgoMasterClient\AssetHelper.cs" />
     <Compile Include="YgoMasterClient\AssetHelper.Solo.cs" />

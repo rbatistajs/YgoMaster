@@ -1044,6 +1044,9 @@ namespace YgoMasterClient
                 case "rgactlog":// dev: toggle activation logging -- [rgchain] push (FUN_180163050) + [rgcast] activate (FUN_180163d60) + [rgcmd] player commands. Usage: rgactlog [on|off]
                     DuelDll.SetActLog(!(splitted.Length > 1 && splitted[1] == "off"));
                     break;
+                case "rgsig":// dev: verify the duel.dll internal-function signatures resolve (after a game patch). ok/MOVED/MISS per fn. Usage: rgsig
+                    DuelSig.Verify();
+                    break;
                 case "rgcmd":// dev: issue a raw player command (DLL_DuelComDoCommand) -- mainly to confirm/pump an activation (cmd 12). Usage: rgcmd <player> <pos> <index> <cmd>
                     {
                         int cp, cpos, cidx, ccmd;

@@ -24,14 +24,12 @@ namespace YgoMasterClient
         // FUN_180592bf0(cmdMode): validates the confirmed selection (the check Monster Reborn does at confirm).
         delegate int Del_ValidateSelectConfirm(int cmdMode);
         static Del_ValidateSelectConfirm ValidateSelectConfirm;
-        const long RVA_ValidateSelectConfirm = 0x592bf0;
 
         // FUN_180534bc0(ctx, player, cardId, p4): the engine's effect target-builder -- looks up cardId's handler
         // and fills the shared list buffer (DAT_1811adc30) with its legal targets. We call it with Monster Reborn's
         // cid to get the engine's real "can be Special Summoned from a GY" set (see CanReviveFromGrave).
         delegate int Del_BuildSelectList(long ctx, long player, short cardId, int p4);
         static Del_BuildSelectList BuildSelectList;
-        const long RVA_BuildSelectList = 0x534bc0;
         const long RVA_SelectListBuf = 0x11adc30;   // *(libBase + this) = DAT_1811adc30, the list buffer
         const int MonsterRebornCid = 4842;          // a generic GY-revive effect; its target set = revivable cards
 
@@ -50,8 +48,8 @@ namespace YgoMasterClient
         // Bind the validator. Called once from DuelDll's static ctor.
         public static void Init(IntPtr lib)
         {
-            ValidateSelectConfirm = Utils.GetFunc<Del_ValidateSelectConfirm>((IntPtr)(lib.ToInt64() + RVA_ValidateSelectConfirm));
-            BuildSelectList = Utils.GetFunc<Del_BuildSelectList>((IntPtr)(lib.ToInt64() + RVA_BuildSelectList));
+            ValidateSelectConfirm = Utils.GetFunc<Del_ValidateSelectConfirm>(DuelSig.Resolve("ValidateSelectConfirm"));
+            BuildSelectList = Utils.GetFunc<Del_BuildSelectList>(DuelSig.Resolve("BuildSelectList"));
         }
 
         // True if the card with this uid can be Special Summoned from a graveyard, per the engine's real legality:
