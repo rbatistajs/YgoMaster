@@ -258,6 +258,10 @@ All read functions are available from any hook.
 | `extra_count(player)` | cards in extra deck |
 | `banish_count(player)` | banished cards |
 | `player_lp(player)` | the player's life points (`int`) |
+| `turn_num()` | current turn number (`int`) |
+| `current_phase()` | current phase as a `DuelPhase` name (`"Draw"`…`"End"`); compare with `DuelPhase.Battle` |
+| `current_step()` / `damage_step()` | engine step counters (`int`) |
+| `zone_available(player, zone)` | `true` if that zone (a zone code) is free for placement |
 | `pile_cards{ player_id, location }` | array of card tables for an off-field pile (`"hand"`/`"deck"`/`"grave"`/`"extra"`/`"banish"`) |
 | `hand_cards` / `deck_cards` / `grave_cards` / `extra_cards` / `banish_cards` `(player)` | shorthand for `pile_cards` of that pile |
 | `log(x)` | print `x` to the console (tables print as `{ k=v, … }`) |
