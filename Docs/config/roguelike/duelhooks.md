@@ -36,6 +36,7 @@ optional `params` table) so a single generic `.lua` can be reused by many relics
   - [`special_summon`](#special_summon)
   - [`to_grave` / `to_hand` / `banish` / `destroy`](#to_grave--to_hand--banish--destroy)
   - [`debug_command`](#debug_command)
+  - [`cheat_card`](#cheat_card)
   - [`run_effect` / `effect_activate_*`](#run_effect--effect_activate_)
   - [`activate_effect`](#activate_effect)
   - [`chain_effect`](#chain_effect)
@@ -375,6 +376,26 @@ debug_command{ player_id = 0, location = "deck", index = 0, cmd = 6 }
 
 Full `cmd` catalogue and the RE detail: `Docs/design/duel-action-primitives.md`.
 
+### `cheat_card`
+
+Drop a card straight into play **mid-duel** (`DLL_DuelComCheatCard`) — no summon, no cost, no triggers. It
+writes the card into the duel-state slot and emits the view command that materializes it. The engine runs
+that emit only when **not** replaying, which is exactly the live mid-duel state — so it just works.
+
+```lua
+cheat_card{ player_id = 0, location = 2, cid = 3224 }              -- face-up in your monster zone 2
+cheat_card{ player_id = 1, location = 18, cid = 4007, face = 0 }   -- summon-to-field, set face-down, opponent
+```
+
+- **`location`** — a numeric **position code** (here it is *not* a pile name like the other actions): `0`–`6` = a monster zone (direct placement), `18` (`0x12`) = summon-to-field. Default `0`.
+- **`cid`** — card id to spawn. Default `0`.
+- **`index`** — placement slot index. Default `0`.
+- **`face`** — `1` face-up / `0` face-down. Default `1`.
+- **`turn`** — `0` attack / `1` defense. Default `0`.
+- **`player_id`** — board owner; defaults to you.
+
+Like the other engine actions, must be called from inside a hook (active resolution).
+
 ### `run_effect` / `effect_activate_*`
 
 Play a **view-only** animation (a cutin/highlight) without touching the real effect — for flavour.
@@ -517,3 +538,5 @@ While iterating, scripts can be loaded/inspected from the in-game console:
 - `rgeff [on|off]` — log the view-event bus (DuelViewType + params) — what the hooks ride on.
 - `rgcast <player> <category> <zone> <effId> <uid> [ctx]` — manual `activate_effect` (real chain).
 - `rgpile <player> <location>` / `rguid <player> <zone>` — list a pile / get a field card's uid+cid.
+- `rgcheat <player> <position> <index> <cid> [face] [turn]` — cheat a card into play mid-duel (`cheat_card`).
+- `rgsig` / `rgdata` — verify the duel.dll functions / data globals still resolve after a game patch (ok/MOVED/MISS).
