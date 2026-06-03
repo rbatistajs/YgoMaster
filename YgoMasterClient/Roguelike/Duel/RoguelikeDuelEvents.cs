@@ -40,11 +40,12 @@ namespace YgoMasterClient
             RoguelikeDuelHooks.Fire("turn", DynValue.NewTable(RoguelikeLua.BuildTurnState(turnPlayer)));
         }
 
-        // Phase-change event: fire on("phase", { phase }). A PhaseChange view's param1 = the new DuelPhase (0-5).
-        public static void OnPhase(int phase)
+        // Phase-change event: fire on("phase", { player_id, player_type, phase }). A PhaseChange view's
+        // param1 = the player whose phase it is, param2 = the new DuelPhase (0-5).
+        public static void OnPhase(int player, int phase)
         {
             if (!RoguelikeDuelHooks.Has("phase")) return;
-            RoguelikeDuelHooks.Fire("phase", DynValue.NewTable(RoguelikeLua.BuildPhaseState(phase)));
+            RoguelikeDuelHooks.Fire("phase", DynValue.NewTable(RoguelikeLua.BuildPhaseState(player, phase)));
         }
 
         static void Start(string hook, int uid) { _pending[uid] = hook; Fire(hook, uid, "init"); }

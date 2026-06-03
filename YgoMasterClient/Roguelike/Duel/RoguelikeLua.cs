@@ -512,10 +512,13 @@ namespace YgoMasterClient
             return t;
         }
 
-        // Lua table for the phase event: { phase } = the new DuelPhase name (Draw/Standby/Main1/Battle/Main2/End).
-        public static Table BuildPhaseState(int phase)
+        // Lua table for the phase event: { player_id, player_type, phase } -- whose phase it is + the new DuelPhase
+        // name (Draw/Standby/Main1/Battle/Main2/End). A PhaseChange view's param1 = player, param2 = phase.
+        public static Table BuildPhaseState(int player, int phase)
         {
             Table t = new Table(Engine());
+            t["player_id"] = player & 1;
+            t["player_type"] = (player & 1) == DuelDll.MyID ? "player" : "cpu";
             t["phase"] = ((DuelPhase)phase).ToString();
             return t;
         }

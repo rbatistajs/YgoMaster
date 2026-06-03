@@ -773,10 +773,10 @@ namespace YgoMasterClient
                 try { RoguelikeDuelEvents.OnTurn(param1); }
                 catch (Exception ex) { Console.WriteLine("[hook] turn EX: " + ex.Message); }
             }
-            // Phase-change event: param1 = the new DuelPhase. Fires on("phase", { phase }).
+            // Phase-change event: param1 = the player, param2 = the new DuelPhase. Fires on("phase", { …, phase }).
             if (id == (int)DuelViewType.PhaseChange)
             {
-                try { RoguelikeDuelEvents.OnPhase(param1); }
+                try { RoguelikeDuelEvents.OnPhase(param1, param2); }
                 catch (Exception ex) { Console.WriteLine("[hook] phase EX: " + ex.Message); }
             }
             // dev (rgselnext): raise the card selection from inside a real summon's resolution (active loop).

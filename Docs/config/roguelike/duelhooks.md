@@ -213,17 +213,14 @@ end)
 
 ### `phase`
 
-Fires on every **phase change** (Draw → Standby → Main1 → Battle → Main2 → End), for the turn player.
+Fires on every **phase change** (Draw → Standby → Main1 → Battle → Main2 → End), for both sides.
 
-**Context `p`:** `{ phase }` — the new phase as a `DuelPhase` name (`"Draw"`, `"Standby"`, `"Main1"`,
-`"Battle"`, `"Main2"`, `"End"`). The phase carries no player; combine with [`turn`](#turn) to know whose
-phase it is.
+**Context `p`:** `{ player_id, player_type, phase }` — whose phase it is, plus the new phase as a
+`DuelPhase` name (`"Draw"`, `"Standby"`, `"Main1"`, `"Battle"`, `"Main2"`, `"End"`).
 
 ```lua
-local mine = false
-on("turn",  function(t) mine = t.player_type == "player" end)
 on("phase", function(p)
-  if mine and p.phase == DuelPhase.Battle then
+  if p.player_type == "player" and p.phase == DuelPhase.Battle then
     -- start of YOUR Battle Phase
   end
 end)
