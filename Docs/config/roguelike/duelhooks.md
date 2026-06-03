@@ -30,6 +30,7 @@ optional `params` table) so a single generic `.lua` can be reused by many relics
   - [`set`](#set)
   - [`turn`](#turn)
   - [`phase`](#phase)
+  - [`activate`](#activate)
 - [Reading the duel](#reading-the-duel)
 - [Actions](#actions)
   - [`special_summon`](#special_summon)
@@ -237,8 +238,25 @@ on("phase", function(p)
 end)
 ```
 
-> More events (`attack`, `activate`, `destroy`, `draw`, …) ride the same view bus and will follow the
-> same shape — a context carrying at least the `uid`, from which `card_state(uid)` resolves the rest.
+### `activate`
+
+Fires when a card effect is put on the chain — any activation (a Spell/Trap, or an effect/trigger).
+
+**Context `e`:** `{ cid, player_id, player_type }` — the activating card's id and who activated it. Gate on
+the kind with `card_props(e.cid)` (a Normal Spell = `simple_kind == CardSimpleKind.Spell` and
+`icon == CardIcon.Normal`).
+
+```lua
+on("activate", function(e)
+  if e.player_type == "cpu" and card_props(e.cid).simple_kind == CardSimpleKind.Spell then
+    -- the opponent activated a Spell -> e.g. draw a card
+    to_hand{ player_id = 0, location = "deck", index = 0 }
+  end
+end)
+```
+
+> More events (`attack`, `destroy`, `draw`, …) ride the same view bus and will follow the same shape — a
+> context carrying at least the `uid`, from which `card_state(uid)` resolves the rest.
 
 ---
 
