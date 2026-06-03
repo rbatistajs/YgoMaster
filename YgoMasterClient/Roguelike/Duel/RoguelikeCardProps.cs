@@ -3,7 +3,11 @@ using YgoMaster;
 
 namespace YgoMasterClient
 {
-    // Static card properties by cid (race/attr/level/type/atk/def), resolved from the game's CARD_Prop
+    // The archetype-agnostic "simple kind" of a card (one per card), derived from its CardFrame by
+    // FrameToSimpleKind. Exposed to Lua as CardSimpleKind (the enum names) to match card_props(cid).simple_kind.
+    enum CardSimpleKind { Normal, Effect, Ritual, Fusion, Synchro, Xyz, Link, Pendulum, Spell, Trap, Token, God }
+
+    // Static card properties by cid (race/attr/level/simple_kind/atk/def), resolved from the game's CARD_Prop
     // data via YdkHelper.GameCardInfo (PropA/PropB decode) and cached. Single source for both the
     // RoguelikeStatBuff type filter and the duelHook get_card_props, so buff rules and Lua hooks agree.
     // Props are by-cid (static), independent of any in-duel instance.
@@ -12,7 +16,7 @@ namespace YgoMasterClient
         public struct Props
         {
             public int Cid, Race, Attr, Level, Atk, Def;
-            public string Type;   // normal/effect/fusion/synchro/xyz/link/ritual/pendulum/spell/trap/token/god
+            public string SimpleKind;   // CardSimpleKind name: Normal/Effect/Fusion/Synchro/Xyz/Link/Ritual/Pendulum/Spell/Trap/Token/God
             public string Frame;     // CardFrame name: Normal/Effect/Fusion/Sync/Xyz/Link/Magic/Trap/...
             public string Kind;      // CardKind name: Normal/Effect/Tuner/Toon/Spirit/Flip/Maximum/...
             public string Icon;      // CardIcon name (spell/trap): Normal/Continuous/Equip/QuickPlay/Field/Ritual/Counter
@@ -45,7 +49,7 @@ namespace YgoMasterClient
             p.Level = gi.Level;
             p.Atk = gi.Atk;
             p.Def = gi.Def;
-            p.Type = FrameToType(gi.Frame);
+            p.SimpleKind = FrameToSimpleKind(gi.Frame).ToString();
             p.Frame = gi.Frame.ToString();
             p.Kind = gi.Kind.ToString();
             p.Icon = gi.Icon.ToString();
@@ -53,32 +57,32 @@ namespace YgoMasterClient
             return true;
         }
 
-        // CardFrame -> the lowercase type token used by buff rules and Lua filters (archetype-agnostic).
-        public static string FrameToType(CardFrame f)
+        // CardFrame -> the card's CardSimpleKind (archetype-agnostic token used by buff rules and Lua filters).
+        public static CardSimpleKind FrameToSimpleKind(CardFrame f)
         {
             switch (f)
             {
-                case CardFrame.Normal: return "normal";
-                case CardFrame.Effect: return "effect";
+                case CardFrame.Normal: return CardSimpleKind.Normal;
+                case CardFrame.Effect: return CardSimpleKind.Effect;
                 case CardFrame.Ritual:
-                case CardFrame.RitualPend: return "ritual";
+                case CardFrame.RitualPend: return CardSimpleKind.Ritual;
                 case CardFrame.Fusion:
-                case CardFrame.FusionPend: return "fusion";
+                case CardFrame.FusionPend: return CardSimpleKind.Fusion;
                 case CardFrame.Sync:
                 case CardFrame.Dsync:
-                case CardFrame.SyncPend: return "synchro";
+                case CardFrame.SyncPend: return CardSimpleKind.Synchro;
                 case CardFrame.Xyz:
-                case CardFrame.XyzPend: return "xyz";
-                case CardFrame.Link: return "link";
+                case CardFrame.XyzPend: return CardSimpleKind.Xyz;
+                case CardFrame.Link: return CardSimpleKind.Link;
                 case CardFrame.Pend:
-                case CardFrame.PendFx: return "pendulum";
-                case CardFrame.Magic: return "spell";
-                case CardFrame.Trap: return "trap";
-                case CardFrame.Token: return "token";
+                case CardFrame.PendFx: return CardSimpleKind.Pendulum;
+                case CardFrame.Magic: return CardSimpleKind.Spell;
+                case CardFrame.Trap: return CardSimpleKind.Trap;
+                case CardFrame.Token: return CardSimpleKind.Token;
                 case CardFrame.Oberisk:
                 case CardFrame.Osiris:
-                case CardFrame.Ra: return "god";
-                default: return "effect";
+                case CardFrame.Ra: return CardSimpleKind.God;
+                default: return CardSimpleKind.Effect;
             }
         }
     }

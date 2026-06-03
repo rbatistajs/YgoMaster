@@ -94,6 +94,16 @@ namespace YgoMasterClient
             return (ushort)Marshal.ReadInt16((IntPtr)entry);
         }
 
+        // Expose a CLR enum to Lua as a table of named string constants (member name -> the same name string), so
+        // scripts reference e.g. CardFrame.Magic / CardSimpleKind.Spell instead of the literal string card_props
+        // returns for .frame/.kind/.icon/.simple_kind.
+        static void RegisterEnumNames(Script s, string global, System.Type enumType)
+        {
+            Table t = new Table(s);
+            foreach (string name in System.Enum.GetNames(enumType)) t[name] = name;
+            s.Globals[global] = t;
+        }
+
         // --- API registration (read-only) ---
         static void RegisterApi(Script s)
         {
@@ -120,6 +130,13 @@ namespace YgoMasterClient
                 int uid = SlotUid(p, zone);
                 return uid <= 0 ? DynValue.Nil : DynValue.NewNumber(uid);
             });
+            // Card enums as tables of named string constants (enum member name), matching what card_props returns
+            // for .frame/.kind/.icon/.simple_kind -- so scripts compare without magic strings, e.g.
+            // card_props(cid).simple_kind == CardSimpleKind.Spell.
+            RegisterEnumNames(s, "CardFrame", typeof(CardFrame));
+            RegisterEnumNames(s, "CardKind", typeof(CardKind));
+            RegisterEnumNames(s, "CardIcon", typeof(CardIcon));
+            RegisterEnumNames(s, "CardSimpleKind", typeof(CardSimpleKind));
             s.Globals["hand_count"] = (Func<int, int>)(p => ZoneCount(p, 0x0c));
             s.Globals["deck_count"] = (Func<int, int>)(p => ZoneCount(p, 0x10));
             s.Globals["grave_count"] = (Func<int, int>)(p => ZoneCount(p, 0x14));
@@ -414,13 +431,13 @@ namespace YgoMasterClient
             return -1;
         }
 
-        // Lua table from static card props (cid/race/attr/level/atk/def + type/frame/kind/icon).
+        // Lua table from static card props (cid/race/attr/level/atk/def + simple_kind/frame/kind/icon).
         static Table PropsTable(Script s, RoguelikeCardProps.Props p)
         {
             Table t = new Table(s);
             t["cid"] = p.Cid; t["race"] = p.Race; t["attr"] = p.Attr; t["level"] = p.Level;
             t["atk"] = p.Atk; t["def"] = p.Def;
-            t["type"] = p.Type; t["frame"] = p.Frame; t["kind"] = p.Kind; t["icon"] = p.Icon;
+            t["simple_kind"] = p.SimpleKind; t["frame"] = p.Frame; t["kind"] = p.Kind; t["icon"] = p.Icon;
             return t;
         }
 
@@ -473,8 +490,8 @@ namespace YgoMasterClient
         // (DuelDll.CardBasicValByUid -> DLL_DuelGetCardBasicVal). Field cards (zone 0-6) come back with live
         // values (effects applied); off-field with printed ones. Returns { uid, cid, race, attr, level, atk,
         // def, player_id, player_type, location, zone? } or null if the instance is gone. Shared by
-        // card_state and the summon event.
-        static Table BuildCardState(int uid)
+        // card_state and the lifecycle events (RoguelikeDuelEvents).
+        public static Table BuildCardState(int uid)
         {
             if (uid <= 0) return null;
             IntPtr buf = Marshal.AllocHGlobal(64);
@@ -497,29 +514,6 @@ namespace YgoMasterClient
                 return t;
             }
             finally { Marshal.FreeHGlobal(buf); }
-        }
-
-        // "summon" (RunSummon) and "special_summon" (RunSpSummon) events, fired from the view-event bus. The card
-        // is already on the field, so resolving the uid gives the full live state including the destination zone.
-        // ctx = card_state. Scripts pull the static category with card_props(e.cid).
-        public static void FireSummon(int uid) { FireSummonEvent("summon", uid); }
-        public static void FireSpecialSummon(int uid) { FireSummonEvent("special_summon", uid); }
-        static void FireSummonEvent(string ev, int uid)
-        {
-            if (!RoguelikeDuelHooks.Has(ev)) return;
-            Table t = BuildCardState(uid);
-            if (t == null) return;
-            RoguelikeDuelHooks.Fire(ev, DynValue.NewTable(t));
-        }
-
-        // "set" event, fired from the view bus (DuelDll RunEffect on CardSet, with the uid carried by the
-        // preceding CardMove). The card is already on the field, so the ctx is the full card_state.
-        public static void FireSet(int uid)
-        {
-            if (!RoguelikeDuelHooks.Has("set")) return;
-            Table t = BuildCardState(uid);
-            if (t == null) return;
-            RoguelikeDuelHooks.Fire("set", DynValue.NewTable(t));
         }
 
         // dev: load a hook script with a params table (JSON), registering its on(...) callbacks.

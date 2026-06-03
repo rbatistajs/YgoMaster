@@ -757,19 +757,12 @@ namespace YgoMasterClient
             // FireSummon resolves the full live state (incl. destination zone).
             // Shared last-CardMove uid, refreshed before any per-hook dispatch so other events can reuse it.
             if (id == (int)DuelViewType.CardMove) LastCardMoveUid = param1 & 0x1ff;
-            if (RoguelikeDuelHooks.Has("summon") || RoguelikeDuelHooks.Has("special_summon"))
+            if (RoguelikeDuelEvents.Wants())
             {
-                try
-                {
-                    if (id == (int)DuelViewType.RunSummon) RoguelikeLua.FireSummon(param2);
-                    else if (id == (int)DuelViewType.RunSpSummon) RoguelikeLua.FireSpecialSummon(param2);
-                }
-                catch (Exception ex) { Console.WriteLine("[hook] summon EX: " + ex.Message); }
-            }
-            if (RoguelikeDuelHooks.Has("set") && id == (int)DuelViewType.CardSet)
-            {
-                try { RoguelikeLua.FireSet(LastCardMoveUid); }
-                catch (Exception ex) { Console.WriteLine("[hook] set EX: " + ex.Message); }
+                // Lifecycle (init/success/failed) for summon/special_summon/set. CardSet carries the uid in the
+                // preceding CardMove (LastCardMoveUid); the others carry it in param2.
+                try { RoguelikeDuelEvents.OnViewEvent(id, id == (int)DuelViewType.CardSet ? LastCardMoveUid : param2); }
+                catch (Exception ex) { Console.WriteLine("[hook] lifecycle EX: " + ex.Message); }
             }
             // dev (rgselnext): raise the card selection from inside a real summon's resolution (active loop).
             if (id == (int)DuelViewType.RunSummon) RoguelikeCardSelect.OnSummonResolved();
