@@ -344,6 +344,13 @@ namespace YgoMasterClient
             return (s & 1) + ((s >> 8) * 2);
         }
 
+        // Public reads backed by the DLL proxies (DuelDll.ProxyFunctions; they handle PvP vs solo). Phase = a
+        // DuelPhase value (0-5); step counters; zone availability for placement (locate = a zone code).
+        public static int CurrentPhase() { return (int)DLL_DuelGetCurrentPhase(); }
+        public static int CurrentStep() { return (int)DLL_DuelGetCurrentStep(); }
+        public static int DamageStep() { return (int)DLL_DuelGetCurrentDmgStep(); }
+        public static bool ZoneAvailable(int player, int zone) { return DLL_DuelIsThisZoneAvailable(player & 1, zone) != 0; }
+
         delegate void Del_AddRecord(IntPtr ptr, int size);
         delegate void Del_DLL_SetAddRecordDelegate(Del_AddRecord addRecord);
         static Del_DLL_SetAddRecordDelegate DLL_SetAddRecordDelegate;

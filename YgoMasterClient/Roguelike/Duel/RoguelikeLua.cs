@@ -143,6 +143,13 @@ namespace YgoMasterClient
             s.Globals["extra_count"] = (Func<int, int>)(p => ZoneCount(p, 0x18));
             s.Globals["banish_count"] = (Func<int, int>)(p => ZoneCount(p, 0x1c));
             s.Globals["player_lp"] = (Func<int, int>)(p => DuelDll.GetLP(p));   // life points (DLL_DuelGetLP)
+            // DLL-backed duel reads (no manual offsets). turn_num/current_step/damage_step are ints; current_phase
+            // is the DuelPhase name (matches the `phase` event); zone_available(player, zone) is a placement check.
+            s.Globals["turn_num"] = (Func<int>)(() => (int)DuelDll.DLL_DuelGetTurnNum());
+            s.Globals["current_phase"] = (Func<string>)(() => ((DuelPhase)DuelDll.CurrentPhase()).ToString());
+            s.Globals["current_step"] = (Func<int>)(() => DuelDll.CurrentStep());
+            s.Globals["damage_step"] = (Func<int>)(() => DuelDll.DamageStep());
+            s.Globals["zone_available"] = (Func<int, int, bool>)((p, z) => DuelDll.ZoneAvailable(p, z));
             s.Globals["deck_top"] = (Func<int, DynValue>)(p =>
             {
                 int cid = DeckTop(p);
