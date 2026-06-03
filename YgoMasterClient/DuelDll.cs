@@ -450,6 +450,7 @@ namespace YgoMasterClient
             LogToFile(string.Empty, false);
             ReplayData.Clear();
             RoguelikeChainEffect.Clear();
+            RoguelikeLua.ClearDuelTable();
             SpecialResultType = DuelResultType.None;
             SpecialFinishType = DuelFinishType.None;
             DuelEndResult = 0;

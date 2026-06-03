@@ -59,6 +59,10 @@ namespace YgoMasterClient
                 s.DoString(
                     "function merge(...) local r={} for i=1,select('#',...) do local t=select(i,...) if type(t)=='table' then for k,v in pairs(t) do r[k]=v end end end return r end " +
                     "function spread(...) local r={} for i=1,select('#',...) do local t=select(i,...) if type(t)=='table' then for _,v in ipairs(t) do r[#r+1]=v end end end return r end");
+                // Duel: a shared scratch table for scripts -- persists across hooks AND scripts within a duel (all
+                // scripts share one engine), reset each duel (ClearDuelTable). Scripts read/write Duel.<anything>
+                // to coordinate state (counters, flags, sets of uids, ...).
+                s.Globals["Duel"] = new Table(s);
                 _script = s;
             }
             return _script;
@@ -138,11 +142,30 @@ namespace YgoMasterClient
             s.Globals["grave_count"] = (Func<int, int>)(p => ZoneCount(p, 0x14));
             s.Globals["extra_count"] = (Func<int, int>)(p => ZoneCount(p, 0x18));
             s.Globals["banish_count"] = (Func<int, int>)(p => ZoneCount(p, 0x1c));
+            s.Globals["player_lp"] = (Func<int, int>)(p => DuelDll.GetLP(p));   // life points (DLL_DuelGetLP)
             s.Globals["deck_top"] = (Func<int, DynValue>)(p =>
             {
                 int cid = DeckTop(p);
                 return cid == 0 ? DynValue.Nil : DynValue.NewNumber(cid);
             });
+            // pile_cards{ player_id, location }: array of card tables for an off-field pile (hand/deck/grave/extra/
+            // banish). location is a name or a pile code (13/14/15/16/17). Aliases: hand_cards/deck_cards/
+            // grave_cards/extra_cards/banish_cards(player). Each entry is a card slot, ready for to_grave/special_summon/etc.
+            s.Globals["pile_cards"] = (Func<DynValue, DynValue>)(arg =>
+            {
+                Table opts = (arg != null && arg.Type == DataType.Table) ? arg.Table : null;
+                if (opts == null) { Console.WriteLine("[lua] pile_cards: needs { player_id, location }"); return DynValue.Nil; }
+                int player = OptInt(opts, "player_id", DuelDll.MyID);
+                DynValue lv = opts.Get("location");
+                int loc = lv.Type == DataType.Number ? (int)lv.Number : (lv.Type == DataType.String ? LocationCode(lv.String) : -1);
+                if (loc < 0) { Console.WriteLine("[lua] pile_cards: bad/missing location"); return DynValue.Nil; }
+                return DynValue.NewTable(PileCards(player, loc));
+            });
+            s.Globals["hand_cards"] = (Func<int, DynValue>)(p => DynValue.NewTable(PileCards(p, 13)));
+            s.Globals["deck_cards"] = (Func<int, DynValue>)(p => DynValue.NewTable(PileCards(p, 15)));
+            s.Globals["grave_cards"] = (Func<int, DynValue>)(p => DynValue.NewTable(PileCards(p, 16)));
+            s.Globals["extra_cards"] = (Func<int, DynValue>)(p => DynValue.NewTable(PileCards(p, 14)));
+            s.Globals["banish_cards"] = (Func<int, DynValue>)(p => DynValue.NewTable(PileCards(p, 17)));
             s.Globals["log"] = (Action<DynValue>)(v => Console.WriteLine("[lua] " + Stringify(v)));
             // on(name, fn): pin a callback to a hook. The params table active during the load is captured and
             // passed back as fn's 2nd arg on dispatch (see RoguelikeDuelHooks).
@@ -359,6 +382,21 @@ namespace YgoMasterClient
             return t;
         }
 
+        // Array of card tables (PileCard: { uid, cid, player_id, player_type, location, index }) for every card in
+        // an off-field pile (hand/deck/grave/extra/banish). Empty table if `location` isn't an off-field pile or
+        // it's empty. Each entry is a ready-to-use card slot (passes straight to to_grave/special_summon/...).
+        static Table PileCards(int player, int location)
+        {
+            Table arr = new Table(Engine());
+            int cnt = PileCount(player, location);
+            for (int i = 0; i < cnt; i++)
+            {
+                Table c = PileCard(player, location, i);
+                if (c != null) arr.Append(DynValue.NewTable(c));
+            }
+            return arr;
+        }
+
         // Extract (player, location code, index) from a card table (select_card / card_state result).
         static bool CardSlot(DynValue cardv, out int player, out int location, out int index, out int control)
         {
@@ -521,6 +559,15 @@ namespace YgoMasterClient
             t["player_type"] = (player & 1) == DuelDll.MyID ? "player" : "cpu";
             t["phase"] = ((DuelPhase)phase).ToString();
             return t;
+        }
+
+        // Reset the shared `Duel` scratch table at duel start, so a script's state doesn't leak between duels.
+        public static void ClearDuelTable()
+        {
+            if (_script == null) return;
+            DynValue d = _script.Globals.Get("Duel");
+            if (d != null && d.Type == DataType.Table) d.Table.Clear();
+            else _script.Globals["Duel"] = new Table(_script);
         }
 
         // dev: load a hook script with a params table (JSON), registering its on(...) callbacks.
