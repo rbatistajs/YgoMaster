@@ -15,18 +15,7 @@ using YgoMaster.Net.Message;
 
 namespace YgoMasterClient
 {
-    // Engine card "position"/location codes: the location reported by CardBasicValByUid and the position arg
-    // of DLL_DuelComDoDebugCommand / begin-SS. 0-12 are on-field zones (Master Duel master-rule board; Goat
-    // only uses M1-M5/S1-S5/Field), 13-17 the off-field piles. Member names double as the Lua location names
-    // (lowercased): m1..m5, emz1/emz2, s1..s5, field, hand, extra, deck, grave, banish.
-    enum CardPos
-    {
-        M1 = 0, M2 = 1, M3 = 2, M4 = 3, M5 = 4,      // main monster zones
-        EMZ1 = 5, EMZ2 = 6,                           // extra monster zones (unused in Goat)
-        S1 = 7, S2 = 8, S3 = 9, S4 = 10, S5 = 11,    // spell/trap zones
-        Field = 12,                                   // field spell zone
-        Hand = 13, Extra = 14, Deck = 15, Grave = 16, Banish = 17,
-    }
+
 
     unsafe static partial class DuelDll
     {
@@ -768,12 +757,12 @@ namespace YgoMasterClient
             // FireSummon resolves the full live state (incl. destination zone).
             // Shared last-CardMove uid, refreshed before any per-hook dispatch so other events can reuse it.
             if (id == (int)DuelViewType.CardMove) LastCardMoveUid = param1 & 0x1ff;
-            if (RoguelikeDuelHooks.Has("summon"))
+            if (RoguelikeDuelHooks.Has("summon") || RoguelikeDuelHooks.Has("special_summon"))
             {
                 try
                 {
-                    if (id == (int)DuelViewType.RunSummon) RoguelikeLua.FireSummon(param2, "normal");
-                    else if (id == (int)DuelViewType.RunSpSummon) RoguelikeLua.FireSummon(param2, "special");
+                    if (id == (int)DuelViewType.RunSummon) RoguelikeLua.FireSummon(param2);
+                    else if (id == (int)DuelViewType.RunSpSummon) RoguelikeLua.FireSpecialSummon(param2);
                 }
                 catch (Exception ex) { Console.WriteLine("[hook] summon EX: " + ex.Message); }
             }

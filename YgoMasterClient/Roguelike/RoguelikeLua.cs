@@ -8,6 +8,18 @@ using YgoMaster;   // DuelViewType
 
 namespace YgoMasterClient
 {
+    // Engine card "position"/location codes: the location reported by CardBasicValByUid and the position arg
+    // of DLL_DuelComDoDebugCommand / begin-SS. 0-12 are on-field zones (Master Duel master-rule board; Goat
+    // only uses M1-M5/S1-S5/Field), 13-17 the off-field piles. Member names double as the Lua location names
+    // (lowercased): m1..m5, emz1/emz2, s1..s5, field, hand, extra, deck, grave, banish.
+    enum CardPos
+    {
+        M1 = 0, M2 = 1, M3 = 2, M4 = 3, M5 = 4,      // main monster zones
+        EMZ1 = 5, EMZ2 = 6,                           // extra monster zones (unused in Goat)
+        S1 = 7, S2 = 8, S3 = 9, S4 = 10, S5 = 11,    // spell/trap zones
+        Field = 12,                                   // field spell zone
+        Hand = 13, Extra = 14, Deck = 15, Grave = 16, Banish = 17,
+    }
     // Lua runtime for the roguelike duel layer (MoonSharp, sandboxed). v1 = engine + read-only API + a dev
     // runner. Actions and event dispatch come later; the buff may move here too. A single shared Script holds
     // the API (registered once); reads go through DuelDll.DuelLibBase -> duel state. Offsets per
@@ -198,6 +210,19 @@ namespace YgoMasterClient
             {
                 DuelDll.QueueRunEffect((int)DuelViewType.CutinActivate, player & 1, 0, 0);
                 DuelDll.QueueRunEffect((int)DuelViewType.CardHappen, player & 1, cid, 0);
+            });
+            // activate_effect(player, category, zone, effId, uid [, ctx]): drive a REAL chain-link activation of
+            // effId attributed to the card at uid -- full engine resolution (validation/cost/target/effect), no cid
+            // change. category matches the effId's type (0 spell/trap, 2 pile, 3 monster); zone = that card's real
+            // zone, as a number or a CardPos name (m1..s5/field 0-12, hand/extra/deck/grave/banish 13-17); uid from
+            // field_uid()/card_state; ctx (a DynValue) defaults to 0. Runs during the player's priority.
+            s.Globals["activate_effect"] = (Action<int, int, DynValue, int, int, DynValue>)((player, category, zonev, effId, uid, ctxv) =>
+            {
+                int zone;
+                if (zonev != null && zonev.Type == DataType.Number) zone = (int)zonev.Number;
+                else { CardPos cp; if (zonev == null || zonev.Type != DataType.String || !Enum.TryParse(zonev.String, true, out cp)) { Console.WriteLine("[lua] activate_effect: zone must be a number or a CardPos name (m1..s5, hand, grave, ...)"); return; } zone = (int)cp; }
+                long ctx = ctxv != null && ctxv.Type == DataType.Number ? (long)ctxv.Number : 0;
+                DuelDll.QueueActivateEffect(player, category, zone, effId, (uint)uid, ctx);
             });
             // _select_begin(opts): internal half of select_card (the yielding Lua wrapper is set up in Engine()).
             // Builds the filtered candidate set and raises the selection; returns true if one was raised (>=1
@@ -474,17 +499,17 @@ namespace YgoMasterClient
             finally { Marshal.FreeHGlobal(buf); }
         }
 
-        // "summon" event, fired from the view-event bus (DuelDll RunEffect on RunSummon / RunSpSummon). The
-        // card is already on the field, so resolving the uid gives the full live state including the
-        // destination zone. ctx = card_state + kind ("normal" | "special"). Scripts pull the category with
-        // card_props(e.cid).
-        public static void FireSummon(int uid, string kind)
+        // "summon" (RunSummon) and "special_summon" (RunSpSummon) events, fired from the view-event bus. The card
+        // is already on the field, so resolving the uid gives the full live state including the destination zone.
+        // ctx = card_state. Scripts pull the static category with card_props(e.cid).
+        public static void FireSummon(int uid) { FireSummonEvent("summon", uid); }
+        public static void FireSpecialSummon(int uid) { FireSummonEvent("special_summon", uid); }
+        static void FireSummonEvent(string ev, int uid)
         {
-            if (!RoguelikeDuelHooks.Has("summon")) return;
+            if (!RoguelikeDuelHooks.Has(ev)) return;
             Table t = BuildCardState(uid);
             if (t == null) return;
-            t["kind"] = kind;
-            RoguelikeDuelHooks.Fire("summon", DynValue.NewTable(t));
+            RoguelikeDuelHooks.Fire(ev, DynValue.NewTable(t));
         }
 
         // "set" event, fired from the view bus (DuelDll RunEffect on CardSet, with the uid carried by the
