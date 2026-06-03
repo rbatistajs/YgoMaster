@@ -236,7 +236,7 @@ namespace YgoMasterClient
             if (Func_BeginSpecialSummon == null || _duelLibBase == IntPtr.Zero) return false;
             long baseOff = SpecialSummonSourceBase(location);
             if (baseOff < 0 || index < 0) return false;
-            IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
+            IntPtr ds = Marshal.ReadIntPtr(DuelData.DuelStateSlot);
             if (ds == IntPtr.Zero) return false;
             long entryAddr = ds.ToInt64() + baseOff + ((long)(owner & 1) * 0x377 + index) * 4;   // source: owner's pile
             int cid = (ushort)Marshal.ReadInt16((IntPtr)entryAddr);
@@ -312,7 +312,7 @@ namespace YgoMasterClient
                 default: return "(location must be 13-17)";
             }
             if (_duelLibBase == IntPtr.Zero) return "(no lib)";
-            IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
+            IntPtr ds = Marshal.ReadIntPtr(DuelData.DuelStateSlot);
             if (ds == IntPtr.Zero) return "(no duel)";
             long b = ds.ToInt64();
             int cnt = Marshal.ReadInt32((IntPtr)(b + (long)(player & 1) * 0xddc + pcountOff));
@@ -336,7 +336,7 @@ namespace YgoMasterClient
         {
             cid = 0;
             if (_duelLibBase == IntPtr.Zero) return -1;
-            IntPtr ds = Marshal.ReadIntPtr((IntPtr)(_duelLibBase.ToInt64() + 0x11adc50));
+            IntPtr ds = Marshal.ReadIntPtr(DuelData.DuelStateSlot);
             if (ds == IntPtr.Zero) return -1;
             long slot = ds.ToInt64() + (long)(player & 1) * 0xddc + (long)zone * 0x1c;
             cid = (ushort)Marshal.ReadInt16((IntPtr)(slot + 0x5c));
@@ -379,6 +379,7 @@ namespace YgoMasterClient
             }
             _duelLibBase = lib;
             DuelSig.Init(lib);   // snapshot .text so internal functions resolve by signature, not a hardcoded RVA
+            DuelData.Init(lib);  // resolve data globals (duel-state cluster) via export rip-loads, not a hardcoded RVA
 
             InitProxyFunctions(lib);
 
@@ -600,14 +601,13 @@ namespace YgoMasterClient
         // the combat snapshot mirror (DAT_1811adc60) -- already built from a buffed compute-path call,
         // so re-adding our delta would double it. Mirrors the engine's own combatant match in
         // FUN_1800b0000 (slot+0x5e position id vs mirror entry +0x18, with the +0x1bf1 state check) so
-        // bystander monsters still receive the live buff. duel.dll Ghidra base is 0x180000000, hence
-        // DAT_1811adc50 -> RVA 0x11adc50 (duel state) and DAT_1811adc60 -> RVA 0x11adc60 (mirror).
+        // bystander monsters still receive the live buff. duelState (DAT_1811adc50) and mirror (DAT_1811adc60)
+        // come from DuelData -- the duel-state cluster, resolved via export rip-loads, not hardcoded RVAs.
         static bool IsBattleMirrorCombatant(uint player, int zone)
         {
             if (_duelLibBase == IntPtr.Zero) return false;
-            long bas = _duelLibBase.ToInt64();
-            IntPtr duelState = Marshal.ReadIntPtr((IntPtr)(bas + 0x11adc50));
-            IntPtr mirror = Marshal.ReadIntPtr((IntPtr)(bas + 0x11adc60));
+            IntPtr duelState = Marshal.ReadIntPtr(DuelData.DuelStateSlot);
+            IntPtr mirror = Marshal.ReadIntPtr(DuelData.MirrorSlot);
             if (duelState == IntPtr.Zero || mirror == IntPtr.Zero) return false;
             long ds = duelState.ToInt64();
             long mr = mirror.ToInt64();

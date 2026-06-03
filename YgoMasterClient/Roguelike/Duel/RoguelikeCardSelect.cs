@@ -15,8 +15,6 @@ namespace YgoMasterClient
     // it comes from each candidate { player, location, index }.
     static class RoguelikeCardSelect
     {
-        const long DuelStateRva = 0x11adc50;
-
         delegate uint Del_SelectPredicate(uint player, int location, int index);
         static Del_SelectPredicate _predicate;
         static IntPtr _predicatePtr;
@@ -30,7 +28,6 @@ namespace YgoMasterClient
         // cid to get the engine's real "can be Special Summoned from a GY" set (see CanReviveFromGrave).
         delegate int Del_BuildSelectList(long ctx, long player, short cardId, int p4);
         static Del_BuildSelectList BuildSelectList;
-        const long RVA_SelectListBuf = 0x11adc30;   // *(libBase + this) = DAT_1811adc30, the list buffer
         const int MonsterRebornCid = 4842;          // a generic GY-revive effect; its target set = revivable cards
 
         static bool _active;
@@ -40,9 +37,8 @@ namespace YgoMasterClient
 
         static IntPtr Ds()
         {
-            IntPtr lib = DuelDll.DuelLibBase;
-            if (lib == IntPtr.Zero) return IntPtr.Zero;
-            return Marshal.ReadIntPtr((IntPtr)(lib.ToInt64() + DuelStateRva));
+            if (DuelData.DuelStateSlot == IntPtr.Zero) return IntPtr.Zero;
+            return Marshal.ReadIntPtr(DuelData.DuelStateSlot);
         }
 
         // Bind the validator. Called once from DuelDll's static ctor.
@@ -59,9 +55,8 @@ namespace YgoMasterClient
         // selection is actually raised).
         public static bool CanReviveFromGrave(int uid)
         {
-            IntPtr lib = DuelDll.DuelLibBase;
-            if (BuildSelectList == null || lib == IntPtr.Zero) return false;
-            IntPtr buf = Marshal.ReadIntPtr((IntPtr)(lib.ToInt64() + RVA_SelectListBuf));
+            if (BuildSelectList == null || DuelData.SelectBufSlot == IntPtr.Zero) return false;
+            IntPtr buf = Marshal.ReadIntPtr(DuelData.SelectBufSlot);
             if (buf == IntPtr.Zero) return false;
             int n = BuildSelectList(0, DuelDll.MyID & 1, (short)MonsterRebornCid, 0);
             long bb = buf.ToInt64();

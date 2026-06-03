@@ -1047,6 +1047,9 @@ namespace YgoMasterClient
                 case "rgsig":// dev: verify the duel.dll internal-function signatures resolve (after a game patch). ok/MOVED/MISS per fn. Usage: rgsig
                     DuelSig.Verify();
                     break;
+                case "rgdata":// dev: verify the duel.dll data globals (duel-state cluster) resolve via export rip-loads. ok/MOVED/fb per slot. Usage: rgdata
+                    DuelData.Verify();
+                    break;
                 case "rgcmd":// dev: issue a raw player command (DLL_DuelComDoCommand) -- mainly to confirm/pump an activation (cmd 12). Usage: rgcmd <player> <pos> <index> <cmd>
                     {
                         int cp, cpos, cidx, ccmd;

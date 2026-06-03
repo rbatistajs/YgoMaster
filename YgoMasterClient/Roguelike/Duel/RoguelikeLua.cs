@@ -22,11 +22,10 @@ namespace YgoMasterClient
     }
     // Lua runtime for the roguelike duel layer (MoonSharp, sandboxed). v1 = engine + read-only API + a dev
     // runner. Actions and event dispatch come later; the buff may move here too. A single shared Script holds
-    // the API (registered once); reads go through DuelDll.DuelLibBase -> duel state. Offsets per
-    // duel-action-primitives.md: duel state = *(libBase+0x11adc50), per-player stride 0xddc.
+    // the API (registered once); reads go through DuelData.DuelStateSlot -> duel state. Offsets per
+    // duel-action-primitives.md: the duel-state ptr lives in the resolved slot, per-player stride 0xddc.
     static class RoguelikeLua
     {
-        const long DuelStateRva = 0x11adc50;
         const int PlayerStride = 0xddc;
 
         static Script _script;
@@ -71,9 +70,8 @@ namespace YgoMasterClient
         // --- duel state reads ---
         static IntPtr DuelState()
         {
-            IntPtr lib = DuelDll.DuelLibBase;
-            if (lib == IntPtr.Zero) return IntPtr.Zero;
-            return Marshal.ReadIntPtr((IntPtr)(lib.ToInt64() + DuelStateRva));
+            if (DuelData.DuelStateSlot == IntPtr.Zero) return IntPtr.Zero;
+            return Marshal.ReadIntPtr(DuelData.DuelStateSlot);
         }
 
         // zone count: duel state + player*0xddc + off (0x0c hand, 0x10 deck, 0x14 grave, 0x18 extra, 0x1c banish)
