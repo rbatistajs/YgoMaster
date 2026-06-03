@@ -84,7 +84,18 @@ end)
 ```
 
 A single script may register several hooks. Hook callbacks run **synchronously** during the duel.
-Script-wide state is just a Lua `local` shared by the closures (see the [end-of-turn buff](#examples)).
+
+**Script-local state** is just a Lua `local` shared by the script's closures (see the
+[end-of-turn buff](#examples)). For state shared **across scripts** — or that you just want kept in one
+place — use the global **`Duel`** table: every script runs on one shared engine, so `Duel` is visible to
+all of them and persists across hook calls. It is **reset at the start of each duel**, so nothing leaks
+between duels.
+
+```lua
+on("summon", function(e)
+  Duel.summons = (Duel.summons or 0) + 1     -- count summons this duel; any script can read Duel.summons
+end)
+```
 
 ---
 
@@ -246,7 +257,22 @@ All read functions are available from any hook.
 | `grave_count(player)` | cards in graveyard |
 | `extra_count(player)` | cards in extra deck |
 | `banish_count(player)` | banished cards |
+| `player_lp(player)` | the player's life points (`int`) |
+| `pile_cards{ player_id, location }` | array of card tables for an off-field pile (`"hand"`/`"deck"`/`"grave"`/`"extra"`/`"banish"`) |
+| `hand_cards` / `deck_cards` / `grave_cards` / `extra_cards` / `banish_cards` `(player)` | shorthand for `pile_cards` of that pile |
 | `log(x)` | print `x` to the console (tables print as `{ k=v, … }`) |
+
+Each `pile_cards` entry is a full card slot — `{ uid, cid, player_id, player_type, location, index }` — so it
+filters by `cid`/`card_props(cid)` and passes straight to actions (`to_grave`, `special_summon`, …):
+
+```lua
+-- pull every Normal monster out of your GY back to your hand
+for _, c in ipairs(grave_cards(0)) do
+  if card_props(c.cid).simple_kind == CardSimpleKind.Normal then
+    to_hand(c)
+  end
+end
+```
 
 **`card_state(uid)`** is read straight from the engine, so it always reflects the *current* state:
 
