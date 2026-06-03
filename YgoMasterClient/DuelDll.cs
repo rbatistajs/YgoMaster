@@ -199,7 +199,12 @@ namespace YgoMasterClient
         {
             if (_actLogArmed)
                 try { Console.WriteLine("[rgchain] push mode=" + mode + " effId=" + (cardDesc & 0xffff) + " player=" + (cardDesc >> 31) + " idx=" + ((cardDesc >> 16) & 0x1f) + " desc=0x" + cardDesc.ToString("x") + " p3=0x" + p3.ToString("x") + " p4=0x" + p4.ToString("x")); } catch { }
-            return hookChainPush.Original(mode, cardDesc, p3, p4);
+            uint r = hookChainPush.Original(mode, cardDesc, p3, p4);
+            // Relic "activate" event: every chain-link push is a card activation. cardDesc low16 = the activating
+            // card's id (== cid for a main effect), bit31 = the activating player.
+            try { RoguelikeDuelEvents.OnActivate((int)(cardDesc & 0xffff), (int)(cardDesc >> 31)); }
+            catch (Exception ex) { Console.WriteLine("[hook] activate EX: " + ex.Message); }
+            return r;
         }
         static ulong ActivateEffectDetour(uint param_1, uint param_2, long param_3)
         {

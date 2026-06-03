@@ -568,6 +568,16 @@ namespace YgoMasterClient
             return t;
         }
 
+        // Lua table for the activate event: { cid, player_id, player_type } -- the activating card + who activated.
+        public static Table BuildActivateState(int cid, int player)
+        {
+            Table t = new Table(Engine());
+            t["cid"] = cid;
+            t["player_id"] = player & 1;
+            t["player_type"] = (player & 1) == DuelDll.MyID ? "player" : "cpu";
+            return t;
+        }
+
         // Reset the shared `Duel` scratch table at duel start, so a script's state doesn't leak between duels.
         public static void ClearDuelTable()
         {

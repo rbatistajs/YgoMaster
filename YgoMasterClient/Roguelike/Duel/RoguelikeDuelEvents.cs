@@ -48,6 +48,14 @@ namespace YgoMasterClient
             RoguelikeDuelHooks.Fire("phase", DynValue.NewTable(RoguelikeLua.BuildPhaseState(player, phase)));
         }
 
+        // Card-activation event: fire on("activate", { cid, player_id, player_type }) when an effect is put on the
+        // chain (ChainPush). cid is the activating card's id; use card_props(cid) to gate on spell/trap/etc.
+        public static void OnActivate(int cid, int player)
+        {
+            if (!RoguelikeDuelHooks.Has("activate")) return;
+            RoguelikeDuelHooks.Fire("activate", DynValue.NewTable(RoguelikeLua.BuildActivateState(cid, player)));
+        }
+
         static void Start(string hook, int uid) { _pending[uid] = hook; Fire(hook, uid, "init"); }
 
         static void Resolve(int uid, string status)
