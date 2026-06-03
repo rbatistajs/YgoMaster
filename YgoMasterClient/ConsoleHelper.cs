@@ -1050,6 +1050,20 @@ namespace YgoMasterClient
                 case "rgdata":// dev: verify the duel.dll data globals (duel-state cluster) resolve via export rip-loads. ok/MOVED/fb per slot. Usage: rgdata
                     DuelData.Verify();
                     break;
+                case "rgcheat":// dev: cheat a card into play mid-duel (DLL_DuelComCheatCard). Usage: rgcheat <player> <position> <index> <cid> [face] [turn]  (pos: 0-6 field, 18 summon)
+                    {
+                        int hp, hpos, hidx, hcid, hface = 1, hturn = 0;
+                        if (splitted.Length >= 5 && int.TryParse(splitted[1], out hp) && int.TryParse(splitted[2], out hpos)
+                            && int.TryParse(splitted[3], out hidx) && int.TryParse(splitted[4], out hcid))
+                        {
+                            if (splitted.Length > 5) int.TryParse(splitted[5], out hface);
+                            if (splitted.Length > 6) int.TryParse(splitted[6], out hturn);
+                            DuelDll.QueueCheatCard(hp, hpos, hidx, hcid, hface, hturn);
+                            Console.WriteLine("[rgcheat] queued player=" + hp + " pos=" + hpos + " index=" + hidx + " cid=" + hcid + " face=" + hface + " turn=" + hturn);
+                        }
+                        else Console.WriteLine("[rgcheat] usage: rgcheat <player> <position> <index> <cid> [face] [turn]   (pos: 0-6 field, 18 summon)");
+                    }
+                    break;
                 case "rgcmd":// dev: issue a raw player command (DLL_DuelComDoCommand) -- mainly to confirm/pump an activation (cmd 12). Usage: rgcmd <player> <pos> <index> <cmd>
                     {
                         int cp, cpos, cidx, ccmd;

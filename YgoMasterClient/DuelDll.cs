@@ -256,6 +256,21 @@ namespace YgoMasterClient
                 ActionsToRunInNextSysAct.Add(() => DLL_DuelComDoDebugCommand(player, location, index, cmd));
         }
 
+        // Cheat a card into play mid-duel (DLL_DuelComCheatCard -> body FUN_18058cb60). It registers the cid in the
+        // cheat buffer (DAT_1811adb50), writes the placement into the duel-state slot, and emits the view/record
+        // command via FUN_1801085b0 -- the step that actually materializes the card. That emit gates on replay mode
+        // (`if (*(DAT_1811adc48+8)==3) return;`, i.e. DLL_DuelIsReplayMode), so it only runs when NOT a replay.
+        // Mid-duel that field is already the live value (!=3) -- exactly the state the emit needs -- so we call
+        // straight through and must NOT touch it. (Forcing it to 3 = replay mode silently kills the emit, and the
+        // cheat does nothing.) position: 0-6 = a field zone, 0x12 = summon-to-field. face: 1 up / 0 down. turn:
+        // 0 atk / 1 def. Runs during active resolution (sysact).
+        public static void QueueCheatCard(int player, int position, int index, int cardId, int face, int turn)
+        {
+            if (DLL_DuelComCheatCard == null || _duelLibBase == IntPtr.Zero) return;
+            lock (ActionsToRunInNextSysAct)
+                ActionsToRunInNextSysAct.Add(() => DLL_DuelComCheatCard(player, position, index, cardId, face, turn));
+        }
+
         // Queue a view-event dispatch (the engine's runEffect, via originalRunEffect) on the duel thread --
         // plays a DuelViewType cutin/animation without touching the real effect. id = DuelViewType value;
         // params per the emit site (e.g. CutinActivate 0x48 = (player, cardTextId, 0)). See duelhooks.md.

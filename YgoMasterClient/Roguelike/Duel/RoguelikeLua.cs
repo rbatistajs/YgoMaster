@@ -222,6 +222,15 @@ namespace YgoMasterClient
                 if (location < 0) { Console.WriteLine("[lua] debug_command: bad/missing location"); return; }
                 DuelDll.QueueDebugCommand(player, location, index, cmd);
             });
+            // cheat_card{ player_id, location, index, cid, face?, turn? }: drop a card into play mid-duel. location =
+            // a position code: 0-6 a field zone (direct, no summon rules), 13 hand / 14 extra / 15 deck, or 18 =
+            // summon-to-field. face 1 up / 0 down; turn 0 attack / 1 defense.
+            s.Globals["cheat_card"] = (Action<DynValue>)(arg =>
+            {
+                if (arg == null || arg.Type != DataType.Table) { Console.WriteLine("[lua] cheat_card: needs { player_id, location, index, cid }"); return; }
+                Table t = arg.Table;
+                DuelDll.QueueCheatCard(OptInt(t, "player_id", DuelDll.MyID), OptInt(t, "location", 0), OptInt(t, "index", 0), OptInt(t, "cid", 0), OptInt(t, "face", 1), OptInt(t, "turn", 0));
+            });
             // run_effect(id, p1, p2, p3): raw view-event dispatch -- plays a DuelViewType cutin/animation without
             // touching the real effect (low-level escape hatch). id = a DuelViewType number OR its name as a string
             // (e.g. 0x48 / "CutinActivate", 0x23 / "CardHappen"; case-insensitive). Must be called from inside a
