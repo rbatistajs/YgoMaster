@@ -45,8 +45,7 @@ namespace YgoMasterClient
                 try
                 {
                     try { Console.SetOut(TextWriter.Null); Console.SetError(TextWriter.Null); } catch { }
-                    // +Coroutine: select_card yields the running hook (a coroutine) until the player picks.
-                    s = new Script(CoreModules.Preset_HardSandbox | CoreModules.Coroutine);   // no io/os/require
+                    s = new Script(CoreModules.Preset_HardSandbox);   // no io/os/require; select_card is callback-based (no coroutine)
                 }
                 finally
                 {
@@ -54,10 +53,6 @@ namespace YgoMasterClient
                 }
                 s.Options.ScriptLoader = new FileSystemScriptLoader();
                 RegisterApi(s);
-                // select_card is split: _select_begin (C#) builds the candidates + raises the selection, then the
-                // wrapper yields the running hook coroutine until the confirm resumes it with the chosen card.
-                // Lua-side coroutine.yield() is more reliable here than a CLR NewYieldReq.
-                s.DoString("function select_card(opts) if _select_begin(opts) then return coroutine.yield() end return nil end");
                 // Table helpers for scripts: merge (shallow map-merge of any number of tables, later keys win --
                 // e.g. defaults + overrides) and spread (concatenate their list/array parts in order). Tolerant of
                 // nil args via select('#').
@@ -228,101 +223,92 @@ namespace YgoMasterClient
                 DuelDll.QueueRunEffect((int)DuelViewType.CutinActivate, player & 1, 0, 0);
                 DuelDll.QueueRunEffect((int)DuelViewType.CardHappen, player & 1, cid, 0);
             });
-            // activate_effect(player, category, zone, effId, uid [, ctx]): drive a REAL chain-link activation of
-            // effId attributed to the card at uid -- full engine resolution (validation/cost/target/effect), no cid
-            // change. category matches the effId's type (0 spell/trap, 2 pile, 3 monster); zone = that card's real
-            // zone, as a number or a CardPos name (m1..s5/field 0-12, hand/extra/deck/grave/banish 13-17); uid from
-            // field_uid()/card_state; ctx (a DynValue) defaults to 0. Runs during the player's priority.
-            s.Globals["activate_effect"] = (Action<int, int, DynValue, int, int, DynValue>)((player, category, zonev, effId, uid, ctxv) =>
+            // activate_effect{ player_id, effect_id, category, zone, uid, effect_number = 0, ctx = 0 }: drive a REAL
+            // chain-link activation of effect_id attributed to the card at uid -- full engine resolution
+            // (validation/cost/target/effect), no cid change. category matches the effId's type (0 spell/trap, 2 pile,
+            // 3 monster [default]); zone = that card's real zone, a number or a CardPos name (m1..s5/field 0-12,
+            // hand/extra/deck/grave/banish 13-17); uid from field_uid()/card_state; effect_number selects which of
+            // the card's effects (default 0 = the first); ctx defaults to 0. Runs during the player's priority.
+            s.Globals["activate_effect"] = (Action<DynValue>)(arg =>
             {
+                if (arg == null || arg.Type != DataType.Table) { Console.WriteLine("[lua] activate_effect: needs { player_id, effect_id, category, zone, uid }"); return; }
+                Table t = arg.Table;
+                int player = OptInt(t, "player_id", DuelDll.MyID);
+                int category = OptInt(t, "category", 3);
+                int effId = OptInt(t, "effect_id", 0);
+                int uid = OptInt(t, "uid", 0);
+                int effNum = OptInt(t, "effect_number", 0);
+                long ctx = OptInt(t, "ctx", 0);
+                DynValue zonev = t.Get("zone");
                 int zone;
-                if (zonev != null && zonev.Type == DataType.Number) zone = (int)zonev.Number;
-                else { CardPos cp; if (zonev == null || zonev.Type != DataType.String || !Enum.TryParse(zonev.String, true, out cp)) { Console.WriteLine("[lua] activate_effect: zone must be a number or a CardPos name (m1..s5, hand, grave, ...)"); return; } zone = (int)cp; }
-                long ctx = ctxv != null && ctxv.Type == DataType.Number ? (long)ctxv.Number : 0;
-                DuelDll.QueueActivateEffect(player, category, zone, effId, (uint)uid, ctx);
+                if (zonev.Type == DataType.Number) zone = (int)zonev.Number;
+                else if (zonev.Type == DataType.String) { zone = LocationCode(zonev.String); if (zone < 0) { Console.WriteLine("[lua] activate_effect: bad zone name"); return; } }
+                else { Console.WriteLine("[lua] activate_effect: zone must be a number or a CardPos name (m1..s5, hand, grave, ...)"); return; }
+                if (effId <= 0 || uid <= 0) { Console.WriteLine("[lua] activate_effect: effect_id and uid are required"); return; }
+                DuelDll.QueueActivateEffect(player, category, zone, effId, (uint)uid, ctx, effNum);
             });
-            // _select_begin(opts): internal half of select_card (the yielding Lua wrapper is set up in Engine()).
-            // Builds the filtered candidate set and raises the selection; returns true if one was raised (>=1
-            // candidate), false if none -- the wrapper yields the running hook coroutine on true, or returns nil
-            // on false (the gate that avoids a stuck picker with nothing valid). The Lua `filter` runs HERE during
-            // the build, before the coroutine yields, never from the native predicate -- so nothing re-enters Lua
-            // while the hook is suspended. opts = { from = "grave" (or a list), filter = function(card)->bool,
-            // player = who picks (default you) }.
-            s.Globals["_select_begin"] = (Func<DynValue, bool>)(optsv =>
+            // chain_effect{ source_uid, cost = function() end, effect = function() end }: open a REAL chain via a
+            // blank effect anchored on the field monster at source_uid (its cid must be a Normal/effect-less
+            // monster), then run our callbacks at the engine's phases: cost at the cost phase (CardHappen, optional),
+            // effect at resolution (ChainStep). Each applies our primitives (special_summon, destroy, draw, select,
+            // ...) -- a real chain carrying a custom cost+effect, no engine effId needed. Call during the player's
+            // priority.
+            s.Globals["chain_effect"] = (Action<DynValue>)(arg =>
+            {
+                if (arg == null || arg.Type != DataType.Table) { Console.WriteLine("[lua] chain_effect: needs { source_uid, effect = function, cost = function (optional) }"); return; }
+                Table t = arg.Table;
+                RoguelikeChainEffect.Begin(OptInt(t, "source_uid", 0), t.Get("cost"), t.Get("effect"));
+            });
+            // select_card{ from, filter, player, result = function(card) }: raise a card selection over the
+            // candidates in `from` (a location name or a list of names) that pass `filter`, then call `result` with
+            // the chosen card when the player confirms. Callback-based (no coroutine), so it works from ANY context
+            // -- event hooks AND chain_effect's cost/effect callbacks. `filter` runs HERE during the candidate build
+            // (never from the native predicate, so nothing re-enters Lua mid-render). from defaults to "grave";
+            // player = who picks (default you). With no candidates the modal isn't raised and result never fires.
+            s.Globals["select_card"] = (Action<DynValue>)(optsv =>
             {
                 Table opts = (optsv != null && optsv.Type == DataType.Table) ? optsv.Table : null;
+                if (opts == null) { Console.WriteLine("[lua] select_card: needs { from, filter, result = function(card) }"); return; }
                 HashSet<int> fromSet = new HashSet<int>();
-                DynValue filterFn = DynValue.Nil;
-                int selector = DuelDll.MyID;
-                if (opts != null)
-                {
-                    DynValue fromv = opts.Get("from");
-                    if (fromv.Type == DataType.String) { int c = LocationCode(fromv.String); if (c >= 0) fromSet.Add(c); }
-                    else if (fromv.Type == DataType.Table)
-                        foreach (TablePair pair in fromv.Table.Pairs)
-                            if (pair.Value.Type == DataType.String) { int c = LocationCode(pair.Value.String); if (c >= 0) fromSet.Add(c); }
-                    filterFn = opts.Get("filter");
-                    DynValue pv = opts.Get("player");
-                    if (pv.Type == DataType.Number) selector = (int)pv.Number;
-                }
+                DynValue fromv = opts.Get("from");
+                if (fromv.Type == DataType.String) { int c = LocationCode(fromv.String); if (c >= 0) fromSet.Add(c); }
+                else if (fromv.Type == DataType.Table)
+                    foreach (TablePair pair in fromv.Table.Pairs)
+                        if (pair.Value.Type == DataType.String) { int c = LocationCode(pair.Value.String); if (c >= 0) fromSet.Add(c); }
                 if (fromSet.Count == 0) fromSet.Add(16);   // default: grave
-                DynValue capturedFilter = filterFn;
-                Func<int, int, int, bool> filterWrap = (p, loc, idx) =>
+                DynValue filterFn = opts.Get("filter");
+                DynValue resultFn = opts.Get("result");
+                int selector = DuelDll.MyID;
+                DynValue pv = opts.Get("player");
+                if (pv.Type == DataType.Number) selector = (int)pv.Number;
+                Func<int, int, int, bool> passes = (p, loc, idx) =>
                 {
                     if (!fromSet.Contains(loc)) return false;
                     Table card = PileCard(p, loc, idx);
                     if (card == null) return false;
-                    if (capturedFilter == null || capturedFilter.Type != DataType.Function) return true;
-                    try { DynValue r = Engine().Call(capturedFilter, DynValue.NewTable(card)); return r != null && r.CastToBool(); }
+                    if (filterFn == null || filterFn.Type != DataType.Function) return true;
+                    try { DynValue r = Engine().Call(filterFn, DynValue.NewTable(card)); return r != null && r.CastToBool(); }
                     catch (Exception ex) { Console.WriteLine("[select] filter EX: " + ex.Message); return false; }
                 };
-                // Collect every candidate (both players' piles in fromSet) that passes the filter. This list both
-                // gates the raise (empty -> don't raise) AND drives the native list buffer that the modal renders
-                // (RoguelikeCardSelect.QueueSelect). Each entry is { player, location, index }.
+                // Collect every candidate (both players' piles in fromSet) that passes the filter -- drives the
+                // native list buffer the modal renders (RoguelikeCardSelect.QueueSelect). Each = { player, loc, idx }.
                 List<int[]> candidates = new List<int[]>();
                 foreach (int loc in fromSet)
                     for (int pl = 0; pl < 2; pl++)
                     {
                         int cnt = PileCount(pl, loc);
                         for (int idx = 0; idx < cnt; idx++)
-                            if (filterWrap(pl, loc, idx))
-                                candidates.Add(new int[] { pl, loc, idx });
+                            if (passes(pl, loc, idx)) candidates.Add(new int[] { pl, loc, idx });
                     }
-                if (candidates.Count == 0) return false;
-                RoguelikeCardSelect.QueueSelect(selector, candidates, OnSelectConfirmed);
-                return true;
+                if (candidates.Count == 0) { Console.WriteLine("[select] no candidates"); return; }
+                RoguelikeCardSelect.QueueSelect(selector, candidates, (p, loc, idx) =>
+                {
+                    if (resultFn == null || resultFn.Type != DataType.Function) return;
+                    Table card = PileCard(p, loc, idx);
+                    try { Engine().Call(resultFn, card == null ? DynValue.Nil : DynValue.NewTable(card)); }
+                    catch (Exception ex) { Console.WriteLine("[select] result EX: " + ex.Message); }
+                });
             });
-        }
-
-        // The hook coroutine, suspended on a select_card until the player confirms (null if none pending).
-        static DynValue _pendingCoroutine;
-
-        // Run a hook callback as a coroutine so it can yield on select_card (the wrapper does coroutine.yield()).
-        // If it suspends, hold it for resume on confirm; if it ran to completion (no select_card), drop it.
-        public static void CallCoroutine(DynValue fn, DynValue ctx, DynValue prm)
-        {
-            try
-            {
-                DynValue co = Engine().CreateCoroutine(fn);
-                co.Coroutine.Resume(ctx ?? DynValue.Nil, prm ?? DynValue.Nil);
-                _pendingCoroutine = co.Coroutine.State == CoroutineState.Suspended ? co : null;
-            }
-            catch (Exception ex) { Console.WriteLine("[hook] EX: " + ex.Message); }
-        }
-
-        // RoguelikeCardSelect's onConfirm: resume the suspended hook coroutine with the chosen card, so the Lua
-        // select_card(...) returns it. If that resume hits another select_card it re-suspends -- keep holding it.
-        public static void OnSelectConfirmed(int player, int location, int index)
-        {
-            DynValue co = _pendingCoroutine; _pendingCoroutine = null;
-            if (co == null) return;
-            Table card = PileCard(player, location, index);
-            try
-            {
-                co.Coroutine.Resume(card == null ? DynValue.Nil : DynValue.NewTable(card));
-                if (co.Coroutine.State == CoroutineState.Suspended) _pendingCoroutine = co;
-            }
-            catch (Exception ex) { Console.WriteLine("[select] resume EX: " + ex.Message); }
         }
 
         // card count of an off-field pile (by location code), from the per-player zone counters.

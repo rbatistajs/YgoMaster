@@ -1082,8 +1082,8 @@ namespace YgoMasterClient
                             && int.TryParse(splitted[3], out cz) && TryParseU(splitted[4], out ceff) && TryParseU(splitted[5], out cuid))
                         {
                             if (splitted.Length > 6) TryParseU(splitted[6], out cctx);
-                            DuelDll.QueueActivateEffect(cp, cc, cz, (int)ceff, cuid, (long)cctx);
-                            Console.WriteLine("[rgcast] queued player=" + cp + " cat=" + cc + " zone=" + cz + " effId=" + ceff + " uid=0x" + cuid.ToString("x") + " -> param1=0x" + DuelDll.BuildActivateParam(cp, cc, cz, (int)ceff).ToString("x"));
+                            DuelDll.QueueActivateEffect(cp, cc, cz, (int)ceff, cuid, (long)cctx, 0);
+                            Console.WriteLine("[rgcast] queued player=" + cp + " cat=" + cc + " zone=" + cz + " effId=" + ceff + " uid=0x" + cuid.ToString("x") + " -> param1=0x" + DuelDll.BuildActivateParam(cp, cc, cz, (int)ceff, 0).ToString("x"));
                         }
                         else Console.WriteLine("[rgcast] usage: rgcast <player> <category> <zone> <effId> <uid> [ctx]   (cat: 0 spell/trap, 2 pile, 3 monster; hex 0x.. ok)");
                     }

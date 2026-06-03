@@ -199,6 +199,7 @@ namespace YgoMasterClient
             _actLogArmed = on;
             Console.WriteLine("[rgactlog] " + (on ? "ON" : "off") + "  (push " + (hookChainPush != null ? "hooked" : "NULL") + ", activate " + (hookActivateEffect != null ? "hooked" : "NULL") + ")");
         }
+
         static uint ChainPushDetour(int mode, uint cardDesc, uint p3, uint p4)
         {
             if (_actLogArmed)
@@ -211,7 +212,6 @@ namespace YgoMasterClient
                 try { Console.WriteLine("[rgcast] activate param1=0x" + param_1.ToString("x") + " (effId=" + (param_1 & 0xffff) + ") uid=0x" + param_2.ToString("x") + " ctx=0x" + param_3.ToString("x")); } catch { }
             return hookActivateEffect.Original(param_1, param_2, param_3);
         }
-
         // Entry-base (the [cid, state] start) per off-field pile, for the cardRef.
         static long SpecialSummonSourceBase(int location)
         {
@@ -271,18 +271,19 @@ namespace YgoMasterClient
         // zone (field 0-12) or pile location (13-17); uid = that card's uid (the source, independent of effId); ctx =
         // 0 for a fresh top-level activation. Builds param1 = (player<<31)|(category<<21)|(zone<<16)|effId. Must run on
         // the duel thread during the player's priority (the engine does validation / cost / target / resolution).
-        public static void QueueActivateEffect(int player, int category, int zone, int effId, uint uid, long ctx)
+        public static void QueueActivateEffect(int player, int category, int zone, int effId, uint uid, long ctx, int effNum)
         {
             if (hookActivateEffect == null) return;
-            uint param1 = BuildActivateParam(player, category, zone, effId);
+            uint param1 = BuildActivateParam(player, category, zone, effId, effNum);
             lock (ActionsToRunInNextSysAct)
                 ActionsToRunInNextSysAct.Add(() => hookActivateEffect.Original(param1, uid, ctx));
         }
 
-        // param1 packing for an activation: (player<<31) | (category<<21) | (zone<<16) | effId(low16).
-        public static uint BuildActivateParam(int player, int category, int zone, int effId)
+        // param1 packing for an activation: (player<<31) | (effNum<<25) | (category<<21) | (zone<<16) | effId(low16).
+        // effNum (bits 25-30) picks which of the card's effects to activate (0 = the first/main one).
+        public static uint BuildActivateParam(int player, int category, int zone, int effId, int effNum)
         {
-            return ((uint)(player & 1) << 31) | (((uint)category & 7) << 21) | (((uint)zone & 0x1f) << 16) | ((uint)effId & 0xffff);
+            return ((uint)(player & 1) << 31) | (((uint)effNum & 0x3f) << 25) | (((uint)category & 7) << 21) | (((uint)zone & 0x1f) << 16) | ((uint)effId & 0xffff);
         }
 
         // dev (rgcmd): issue a raw player command (DLL_DuelComDoCommand) on the duel thread -- records (player,
@@ -448,6 +449,7 @@ namespace YgoMasterClient
         {
             LogToFile(string.Empty, false);
             ReplayData.Clear();
+            RoguelikeChainEffect.Clear();
             SpecialResultType = DuelResultType.None;
             SpecialFinishType = DuelFinishType.None;
             DuelEndResult = 0;
@@ -766,6 +768,18 @@ namespace YgoMasterClient
             }
             // dev (rgselnext): raise the card selection from inside a real summon's resolution (active loop).
             if (id == (int)DuelViewType.RunSummon) RoguelikeCardSelect.OnSummonResolved();
+            // chain_effect: run the registered Lua callbacks at a forged blank chain's two phases -- cost at
+            // CardHappen (param2 = effId), effect at ChainStep (param3 = effId). RoguelikeChainEffect matches the
+            // effId to a pending blank-chain effect.
+            if (RoguelikeChainEffect.Wants())
+            {
+                try
+                {
+                    if (id == (int)DuelViewType.CardHappen) RoguelikeChainEffect.OnCost(param2);
+                    else if (id == (int)DuelViewType.ChainStep) RoguelikeChainEffect.OnEffect(param3);
+                }
+                catch (Exception ex) { Console.WriteLine("[chain_effect] EX: " + ex.Message); }
+            }
             if (IsPvpDuel || IsPvpSpectator)
             {
                 DuelEmoteHelper.OnRunEffect((DuelViewType)id, param1, param2, param3);
