@@ -127,6 +127,17 @@ namespace YgoMasterClient
                 int uid = SlotUid(p, zone);
                 return uid <= 0 ? DynValue.Nil : DynValue.NewNumber(uid);
             });
+            // Direct per-instance field reads by uid (same values card_state exposes). 0/false if off-field or gone.
+            s.Globals["card_face"] = (Func<int, int>)(uid => FieldOf(uid, out int p, out int z) ? DuelDll.CardFace(p, z) : 0);
+            s.Globals["turn_counter"] = (Func<int, int>)(uid => FieldOf(uid, out int p, out int z) ? DuelDll.CardTurnCounter(p, z) : 0);
+            s.Globals["is_equip"] = (Func<int, bool>)(uid => FieldOf(uid, out int p, out int z) && DuelDll.CardIsEquip(p, z));
+            // card_counter{ uid, type }: count of a counter type on the field instance (per type, so a query).
+            s.Globals["card_counter"] = (Func<DynValue, int>)(arg =>
+            {
+                Table t = (arg != null && arg.Type == DataType.Table) ? arg.Table : null;
+                if (t == null) { Console.WriteLine("[lua] card_counter: needs { uid, type }"); return 0; }
+                return FieldOf(OptInt(t, "uid", 0), out int p, out int z) ? DuelDll.CardCounter(p, z, OptInt(t, "type", 0)) : 0;
+            });
             // Card enums as tables of named string constants (enum member name), matching what card_props returns
             // for .frame/.kind/.icon/.simple_kind -- so scripts compare without magic strings, e.g.
             // card_props(cid).simple_kind == CardSimpleKind.Spell.
@@ -539,6 +550,22 @@ namespace YgoMasterClient
             return RoguelikeDuelHooks.EvalBuff(DynValue.NewTable(t), out datk, out ddef, out dlevel);
         }
 
+        // Resolve a uid to its on-field (player, zone); false if the card is off-field or gone. Used by the direct
+        // per-instance reads (card_face / turn_counter / is_equip / card_counter).
+        static bool FieldOf(int uid, out int player, out int zone)
+        {
+            player = 0; zone = -1;
+            if (uid <= 0) return false;
+            IntPtr buf = Marshal.AllocHGlobal(64);
+            try
+            {
+                if (!DuelDll.CardBasicValByUid(uid, buf, out player, out int location, out int _) || location >= 0xd) return false;
+                zone = location;
+                return true;
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+        }
+
         // Live-state table of an instance by uniqueId, read straight from the duel.dll
         // (DuelDll.CardBasicValByUid -> DLL_DuelGetCardBasicVal). Field cards (zone 0-6) come back with live
         // values (effects applied); off-field with printed ones. Returns { uid, cid, race, attr, level, atk,
@@ -555,8 +582,10 @@ namespace YgoMasterClient
                 if (cid == 0) return null;
                 Table t = new Table(Engine());
                 t["uid"] = uid; t["cid"] = cid;
-                t["atk"] = Marshal.ReadInt32(buf, 4);
+                t["atk"] = Marshal.ReadInt32(buf, 4);            // live (effects applied on field)
                 t["def"] = Marshal.ReadInt32(buf, 8);
+                t["base_atk"] = Marshal.ReadInt32(buf, 0xc);     // printed/original value
+                t["base_def"] = Marshal.ReadInt32(buf, 0x10);
                 t["race"] = (ushort)Marshal.ReadInt16(buf, 20);
                 t["attr"] = (ushort)Marshal.ReadInt16(buf, 22);
                 t["level"] = (ushort)Marshal.ReadInt16(buf, 26);
@@ -564,6 +593,12 @@ namespace YgoMasterClient
                 t["player_type"] = (player & 1) == DuelDll.MyID ? "player" : "cpu";
                 t["location"] = LocationName(location);
                 if (location < 7) t["zone"] = location;
+                if (location < 0xd)   // on the field: per-instance reads (locate = the field zone)
+                {
+                    t["face"] = DuelDll.CardFace(player, location);          // != 0 = face-up
+                    t["turn_counter"] = DuelDll.CardTurnCounter(player, location);
+                    t["is_equip"] = DuelDll.CardIsEquip(player, location);
+                }
                 return t;
             }
             finally { Marshal.FreeHGlobal(buf); }
@@ -597,6 +632,22 @@ namespace YgoMasterClient
             t["player_id"] = player & 1;
             t["player_type"] = (player & 1) == DuelDll.MyID ? "player" : "cpu";
             return t;
+        }
+
+        // Called per card from the getSpellSpeed hook (DuelDll). Returns a spell-speed override (a number) from the
+        // relic's on("spell_speed", fn) callbacks, or 0 if none. Gated by Has() so no Lua runs unless a relic
+        // registered the hook. ctx = { cid, player_id, player_type, uid, zone }.
+        public static int QuerySpellSpeed(int cid, int player, int uid, int zone)
+        {
+            if (cid <= 0 || !RoguelikeDuelHooks.Has("spell_speed")) return 0;
+            try
+            {
+                Table t = BuildActivateState(cid, player);
+                t["uid"] = uid;
+                t["zone"] = zone;
+                return RoguelikeDuelHooks.EvalSpellSpeed(DynValue.NewTable(t));
+            }
+            catch (Exception ex) { Console.WriteLine("[lua] spell_speed EX: " + ex.Message); return 0; }
         }
 
         // Reset the shared `Duel` scratch table at duel start, so a script's state doesn't leak between duels.

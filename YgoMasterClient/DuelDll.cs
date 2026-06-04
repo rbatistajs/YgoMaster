@@ -188,6 +188,13 @@ namespace YgoMasterClient
         delegate ulong Del_ActivateEffect(uint param_1, uint param_2, long param_3);
         static Hook<Del_ActivateEffect> hookActivateEffect;
 
+        // FUN_180038350(card): the engine's getSpellSpeed (1 normal, 2 quick/trap, 3 counter), derived from the
+        // card's icon. param_1 is a card struct -- [0] = cid, [1] = owner player. Hooking it lets the relic's
+        // on("spell_speed") hook override a card's speed (e.g. make a Normal spell quick) -- the value every
+        // chain-legality check reads -- scoped per-card, without touching the global icon buffer.
+        delegate ulong Del_GetSpellSpeed(IntPtr card);
+        static Hook<Del_GetSpellSpeed> hookGetSpellSpeed;
+
         static bool _actLogArmed;
         public static void SetActLog(bool on)
         {
@@ -211,6 +218,27 @@ namespace YgoMasterClient
             if (_actLogArmed)
                 try { Console.WriteLine("[rgcast] activate param1=0x" + param_1.ToString("x") + " (effId=" + (param_1 & 0xffff) + ") uid=0x" + param_2.ToString("x") + " ctx=0x" + param_3.ToString("x")); } catch { }
             return hookActivateEffect.Original(param_1, param_2, param_3);
+        }
+        static ulong GetSpellSpeedDetour(IntPtr card)
+        {
+            ulong speed = hookGetSpellSpeed.Original(card);
+            try
+            {
+                if (card != IntPtr.Zero)
+                {
+                    // card struct (ushort indices): [0] cid, [1] player, [2] zone, [0xb] posId (== uid). The relic's
+                    // on("spell_speed", fn) returns a speed number to override this card's spell speed.
+                    long c = card.ToInt64();
+                    int cid = (ushort)Marshal.ReadInt16(card);
+                    int player = Marshal.ReadInt16((IntPtr)(c + 2)) & 1;
+                    int zone = (ushort)Marshal.ReadInt16((IntPtr)(c + 4));
+                    int uid = (ushort)Marshal.ReadInt16((IntPtr)(c + 0x16));
+                    int ov = RoguelikeLua.QuerySpellSpeed(cid, player, uid, zone);
+                    if (ov > 0) return (ulong)ov;
+                }
+            }
+            catch { }
+            return speed;
         }
         // Entry-base (the [cid, state] start) per off-field pile, for the cardRef.
         static long SpecialSummonSourceBase(int location)
@@ -365,6 +393,12 @@ namespace YgoMasterClient
         public static int CurrentStep() { return (int)DLL_DuelGetCurrentStep(); }
         public static int DamageStep() { return (int)DLL_DuelGetCurrentDmgStep(); }
         public static bool ZoneAvailable(int player, int zone) { return DLL_DuelIsThisZoneAvailable(player & 1, zone) != 0; }
+        // Per-instance field reads (locate = field zone). face != 0 = face-up; turn counter = turns the card has
+        // been on the field; equip = it's an equip attached to something; counter(type) = that counter's value.
+        public static int CardFace(int player, int zone) { return DLL_DuelGetCardFace(player & 1, zone, 0); }
+        public static int CardTurnCounter(int player, int zone) { return DLL_DuelGetThisCardTurnCounter(player & 1, zone); }
+        public static bool CardIsEquip(int player, int zone) { return DLL_DuelIsThisEquipCard(player & 1, zone) != 0; }
+        public static int CardCounter(int player, int zone, int counter) { return DLL_DuelGetThisCardCounter(player & 1, zone, counter); }
 
         delegate void Del_AddRecord(IntPtr ptr, int size);
         delegate void Del_DLL_SetAddRecordDelegate(Del_AddRecord addRecord);
@@ -402,6 +436,7 @@ namespace YgoMasterClient
             hookDLL_DuelSysAct = new Hook<Del_DLL_DuelSysAct>(DLL_DuelSysAct, PInvoke.GetProcAddress(lib, "DLL_DuelSysAct"));
             hookDuelGetFieldCardVal = new Hook<Del_DuelGetFieldCardVal>(DuelGetFieldCardVal, DuelSig.Resolve("DuelGetFieldCardVal"));
             hookChainPush = new Hook<Del_ChainPush>(ChainPushDetour, DuelSig.Resolve("ChainPush"));
+            hookGetSpellSpeed = new Hook<Del_GetSpellSpeed>(GetSpellSpeedDetour, DuelSig.Resolve("GetSpellSpeed"));
             hookActivateEffect = new Hook<Del_ActivateEffect>(ActivateEffectDetour, DuelSig.Resolve("ActivateEffect"));
 
             hookDLL_DuelComMovePhase = new Hook<Del_DLL_DuelComMovePhase>(DLL_DuelComMovePhase, PInvoke.GetProcAddress(lib, "DLL_DuelComMovePhase"));

@@ -24,6 +24,7 @@ namespace YgoMasterClient
             new Fn { Name = "ActivateEffect",        Rva = 0x163d60, Sig = "40 53 55 41 54 41 55 41 57 48 83 EC 70 48" },
             new Fn { Name = "ValidateSelectConfirm", Rva = 0x592bf0, Sig = "48 89 5C 24 10 48 89 6C 24 18 56 48 83 EC 20 4C 8B 0D" },
             new Fn { Name = "BuildSelectList",       Rva = 0x534bc0, Sig = "48 89 5C 24 18 48 89 6C 24 20 41 56 48 83 EC 20 45 0F" },
+            new Fn { Name = "GetSpellSpeed",         Rva = 0x38350,  Sig = "48 89 4C 24 08 53 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 48" },
         };
 
         static IntPtr _base;

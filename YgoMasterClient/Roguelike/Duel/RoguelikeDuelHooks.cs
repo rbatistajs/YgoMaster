@@ -54,6 +54,26 @@ namespace YgoMasterClient
             return atk != 0 || def != 0 || level != 0;
         }
 
+        // per-card spell-speed query: each "spell_speed" callback returns the card's spell speed as a number
+        // (1 normal, 2 quick, 3 counter), or nothing for no change. Returns the highest override, or 0 if none.
+        // ctx = { cid, player_id, player_type }.
+        public static int EvalSpellSpeed(DynValue ctx)
+        {
+            List<Entry> list;
+            if (!_hooks.TryGetValue("spell_speed", out list)) return 0;
+            int best = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                DynValue r;
+                try { r = RoguelikeLua.Call(list[i].Fn, ctx, list[i].Params); }
+                catch (Exception ex) { Console.WriteLine("[hook] spell_speed EX: " + ex.Message); continue; }
+                if (r == null || r.Type != DataType.Number) continue;   // return a speed number, or nothing
+                int s = (int)r.Number;
+                if (s > best) best = s;
+            }
+            return best;
+        }
+
         // generic event fire (no return value) -- summon/set/... events. Hooks run synchronously; select_card is
         // callback-based (result = function(card)), so nothing needs to block/yield here.
         public static void Fire(string name, DynValue ctx)
