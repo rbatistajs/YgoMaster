@@ -7,6 +7,10 @@ namespace YgoMasterClient
     // FrameToSimpleKind. Exposed to Lua as CardSimpleKind (the enum names) to match card_props(cid).simple_kind.
     enum CardSimpleKind { Normal, Effect, Ritual, Fusion, Synchro, Xyz, Link, Pendulum, Spell, Trap, Token, God }
 
+    // Face-up / face-down of a field instance -- what card_face(uid) and card_state().face report. Exposed to
+    // Lua as CardFace (member names, like the other enums) so scripts read card_face(uid) == CardFace.Down.
+    enum CardFace { Down = 0, Up = 1 }
+
     // Static card properties by cid (race/attr/level/simple_kind/atk/def), resolved from the game's CARD_Prop
     // data via YdkHelper.GameCardInfo (PropA/PropB decode) and cached. Single source for both the
     // RoguelikeStatBuff type filter and the duelHook get_card_props, so buff rules and Lua hooks agree.

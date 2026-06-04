@@ -127,8 +127,9 @@ namespace YgoMasterClient
                 int uid = SlotUid(p, zone);
                 return uid <= 0 ? DynValue.Nil : DynValue.NewNumber(uid);
             });
-            // Direct per-instance field reads by uid (same values card_state exposes). 0/false if off-field or gone.
-            s.Globals["card_face"] = (Func<int, int>)(uid => FieldOf(uid, out int p, out int z) ? DuelDll.CardFace(p, z) : 0);
+            // Direct per-instance field reads by uid (same values card_state exposes). card_face -> CardFace name
+            // (nil off-field); turn_counter/is_equip -> 0/false off-field or gone.
+            s.Globals["card_face"] = (Func<int, DynValue>)(uid => FieldOf(uid, out int p, out int z) ? DynValue.NewString(FaceName(DuelDll.CardFace(p, z))) : DynValue.Nil);
             s.Globals["turn_counter"] = (Func<int, int>)(uid => FieldOf(uid, out int p, out int z) ? DuelDll.CardTurnCounter(p, z) : 0);
             s.Globals["is_equip"] = (Func<int, bool>)(uid => FieldOf(uid, out int p, out int z) && DuelDll.CardIsEquip(p, z));
             // card_counter{ uid, type }: count of a counter type on the field instance (per type, so a query).
@@ -145,6 +146,7 @@ namespace YgoMasterClient
             RegisterEnumNames(s, "CardKind", typeof(CardKind));
             RegisterEnumNames(s, "CardIcon", typeof(CardIcon));
             RegisterEnumNames(s, "CardSimpleKind", typeof(CardSimpleKind));
+            RegisterEnumNames(s, "CardFace", typeof(CardFace));    // Up/Down -- what card_face(uid)/card_state().face return
             RegisterEnumNames(s, "DuelPhase", typeof(DuelPhase));   // Draw/Standby/Main1/Battle/Main2/End -- the on("phase") values
             s.Globals["hand_count"] = (Func<int, int>)(p => ZoneCount(p, 0x0c));
             s.Globals["deck_count"] = (Func<int, int>)(p => ZoneCount(p, 0x10));
@@ -188,7 +190,7 @@ namespace YgoMasterClient
             s.Globals["on"] = (Action<string, DynValue>)((name, fn) => RoguelikeDuelHooks.Register(name, fn));
             // self-documenting: special_summon({ player_id = 0, location = "deck", index = 0 }). The card table is the
             // SOURCE (player_id = owner). Optional options (defaults match a plain face-up attack SS to your side, so
-            // a passed-through card just works): face (1 face-up [default], 0 face-down), turn (0 attack [default],
+            // a passed-through card just works): face (CardFace.Up [default] / CardFace.Down, or 1/0), turn (0 attack [default],
             // 1 defense -- the atk/def rotation), reason (engine reason code, default 0), player_control (which side
             // controls the summoned card, default you -- set to the opponent to give them the card; lets you steal an
             // opponent's card to your field when its player_id is the opponent).
@@ -196,7 +198,7 @@ namespace YgoMasterClient
             {
                 if (!CardSlot(card, out int player, out int loc, out int index, out int control)) { Console.WriteLine("[lua] special_summon: needs { player_id, location, index }"); return false; }
                 Table t = card.Table;
-                int face = OptInt(t, "face", 1);
+                int face = OptFace(t, "face", 1);
                 int turn = OptInt(t, "turn", 0);
                 int reason = OptInt(t, "reason", 0);
                 return DuelDll.QueueSpecialSummon(player, loc, index, face, turn, reason, control);
@@ -235,14 +237,14 @@ namespace YgoMasterClient
             });
             // cheat_card{ player_id, location, index, cid, face?, turn? }: drop a card into play mid-duel. location
             // takes a name or code like the other actions (m1..m5/0-4 zones, hand/extra/deck, ...) plus "summon"
-            // (18) = summon-to-field. face 1 up / 0 down; turn 0 attack / 1 defense.
+            // (18) = summon-to-field. face CardFace.Up/Down or 1/0; turn 0 attack / 1 defense.
             s.Globals["cheat_card"] = (Action<DynValue>)(arg =>
             {
                 if (arg == null || arg.Type != DataType.Table) { Console.WriteLine("[lua] cheat_card: needs { player_id, location, index, cid }"); return; }
                 Table t = arg.Table;
                 int location = CheatPositionCode(t.Get("location"));
                 if (location < 0) { Console.WriteLine("[lua] cheat_card: bad/missing location (a name, a code, or \"summon\")"); return; }
-                DuelDll.QueueCheatCard(OptInt(t, "player_id", DuelDll.MyID), location, OptInt(t, "index", 0), OptInt(t, "cid", 0), OptInt(t, "face", 1), OptInt(t, "turn", 0));
+                DuelDll.QueueCheatCard(OptInt(t, "player_id", DuelDll.MyID), location, OptInt(t, "index", 0), OptInt(t, "cid", 0), OptFace(t, "face", 1), OptInt(t, "turn", 0));
             });
             // run_effect(id, p1, p2, p3): raw view-event dispatch -- plays a DuelViewType cutin/animation without
             // touching the real effect (low-level escape hatch). id = a DuelViewType number OR its name as a string
@@ -466,6 +468,17 @@ namespace YgoMasterClient
             return v != null && v.Type == DataType.Number ? (int)v.Number : def;
         }
 
+        // A face param: accepts a CardFace name ("Up"/"Down") or a raw 0/1 (1 = up); missing/unknown -> def.
+        static int OptFace(Table t, string key, int def)
+        {
+            DynValue v = t.Get(key);
+            if (v == null) return def;
+            if (v.Type == DataType.Number) return (int)v.Number;
+            CardFace f;
+            if (v.Type == DataType.String && Enum.TryParse(v.String, true, out f)) return (int)f;
+            return def;
+        }
+
         // Run a debug command on a card table's slot (to_hand/to_grave/banish/destroy helpers).
         static void CardDebugCmd(DynValue card, int cmd)
         {
@@ -566,6 +579,9 @@ namespace YgoMasterClient
             finally { Marshal.FreeHGlobal(buf); }
         }
 
+        // The engine's face byte is binary; map it to the CardFace name Lua scripts compare against.
+        static string FaceName(int faceByte) { return ((CardFace)(faceByte != 0 ? 1 : 0)).ToString(); }
+
         // Live-state table of an instance by uniqueId, read straight from the duel.dll
         // (DuelDll.CardBasicValByUid -> DLL_DuelGetCardBasicVal). Field cards (zone 0-6) come back with live
         // values (effects applied); off-field with printed ones. Returns { uid, cid, race, attr, level, atk,
@@ -595,7 +611,7 @@ namespace YgoMasterClient
                 if (location < 7) t["zone"] = location;
                 if (location < 0xd)   // on the field: per-instance reads (locate = the field zone)
                 {
-                    t["face"] = DuelDll.CardFace(player, location);          // != 0 = face-up
+                    t["face"] = FaceName(DuelDll.CardFace(player, location)); // CardFace name (Up/Down)
                     t["turn_counter"] = DuelDll.CardTurnCounter(player, location);
                     t["is_equip"] = DuelDll.CardIsEquip(player, location);
                 }
