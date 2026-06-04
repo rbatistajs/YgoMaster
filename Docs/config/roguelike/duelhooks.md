@@ -26,6 +26,7 @@ optional `params` table) so a single generic `.lua` can be reused by many relics
 - [Card category enums](#card-category-enums)
 - [Events](#events)
   - [`buff` (query)](#buff-query)
+  - [`spell_speed` (query)](#spell_speed-query)
   - [`summon` / `special_summon`](#summon--special_summon)
   - [`set`](#set)
   - [`turn`](#turn)
@@ -167,6 +168,29 @@ on("buff", function(c, params)
 end)
 ```
 
+### `spell_speed` (query)
+
+Called **per card** when the engine computes a card's spell speed (the value every chain-legality check
+reads). Return a **number** = the card's spell speed (`1` normal, `2` quick — activatable in chain/response,
+in the Battle Phase, on the opponent's turn when set, `3` counter), or **nothing** for no change. The highest
+override across hooks wins. Scoped to whichever card you accept, so the opponent's copy stays normal unless
+you say otherwise. The card's preview still reads its real type (this doesn't touch the icon, only the live
+speed).
+
+**Context `c`:** `{ cid, player_id, player_type, uid, zone }` (`uid` = the card instance; `zone` = its field
+zone when on the field, so you can scope to one specific copy).
+**Return:** a number (`1`/`2`/`3`) or `nil`.
+
+```lua
+on("spell_speed", function(c)
+  if c.player_type ~= "player" then return end          -- only your cards
+  local p = card_props(c.cid)
+  if p and p.simple_kind == CardSimpleKind.Spell then    -- your Spells become Quick-Play (speed 2)
+    return 2
+  end
+end)
+```
+
 ### `summon` / `special_summon`
 
 Two separate events:
@@ -270,6 +294,8 @@ All read functions are available from any hook.
 | `card_props(cid)` | static props `{ cid, race, attr, level, atk, def, simple_kind, frame, kind, icon }`, or `nil` |
 | `card_state(uid)` | **live** state of an instance (see below), or `nil` if the instance is gone |
 | `field_uid(player, zone)` | `uid` of the monster in `zone` (0–6) for `player`, or `nil` if empty |
+| `card_face(uid)` / `turn_counter(uid)` / `is_equip(uid)` | per-instance field reads by uid (same values as the `card_state` fields); `0`/`false` if off-field |
+| `card_counter{ uid, type }` | count of a counter `type` on a field instance (`int`, 0 if none/off-field) |
 | `deck_top(player)` | `cid` of the top deck card, or `nil` |
 | `hand_count(player)` | cards in hand (`int`) |
 | `deck_count(player)` | cards in main deck |
@@ -300,12 +326,19 @@ end
 **`card_state(uid)`** is read straight from the engine, so it always reflects the *current* state:
 
 ```
-{ uid, cid, race, attr, level, atk, def, player_id, player_type, location, zone? }
+{ uid, cid, atk, def, base_atk, base_def, race, attr, level, player_id, player_type,
+  location, zone?, face?, turn_counter?, is_equip? }
 ```
 
-- `location` is `"field"`, `"hand"`, `"grave"`, `"deck"`, `"extra"`, or `"banish"`.
-- `zone` (0–6) is present only when `location == "field"`.
-- A field card returns **live** atk/def (effects applied); an off-field card returns the printed values.
+- `atk`/`def` are **live** for a field card (effects applied); off-field they're the printed values.
+  `base_atk`/`base_def` are always the printed (original) values.
+- `location` is the zone name for a field card (`"m1"`…`"s5"`, `"field"`), or `"hand"`/`"grave"`/`"deck"`/
+  `"extra"`/`"banish"`.
+- `zone` (0–6) is present only for a monster zone.
+- On the field you also get: **`face`** (≠ 0 = face-up, 0 = face-down/set), **`turn_counter`** (turns the
+  card has been on the field), **`is_equip`** (it's an equip attached to something). Each also has a direct
+  form by uid: `card_face(uid)`, `turn_counter(uid)`, `is_equip(uid)`.
+- Counters are per type, so they're a separate call: **`card_counter{ uid, type }`** → that counter's value.
 
 `uid` identifies a specific copy (vs `cid` = the card type); it is stable while the card stays in a
 spot. Get one from an event context (`e.uid`), from `field_uid(player, zone)`, or from `c.uid` in a
