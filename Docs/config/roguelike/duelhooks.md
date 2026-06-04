@@ -383,11 +383,11 @@ writes the card into the duel-state slot and emits the view command that materia
 that emit only when **not** replaying, which is exactly the live mid-duel state — so it just works.
 
 ```lua
-cheat_card{ player_id = 0, location = 2, cid = 3224 }              -- face-up in your monster zone 2
-cheat_card{ player_id = 1, location = 18, cid = 4007, face = 0 }   -- summon-to-field, set face-down, opponent
+cheat_card{ player_id = 0, location = "m3", cid = 3224 }               -- face-up in your monster zone 3
+cheat_card{ player_id = 1, location = "summon", cid = 4007, face = 0 } -- summon-to-field, set face-down, opponent
 ```
 
-- **`location`** — a numeric **position code** (here it is *not* a pile name like the other actions): `0`–`6` = a monster zone (direct placement), `18` (`0x12`) = summon-to-field. Default `0`.
+- **`location`** — a name or code, same as the other actions (`"m1"`–`"m5"` / `0`–`4` monster zones, `"hand"` / `"deck"` / `"extra"`, …), **plus** `"summon"` (`18`) = let the engine pick the next free zone for the card's type (monster → a monster zone, spell/trap → an S/T zone). Required.
 - **`cid`** — card id to spawn. Default `0`.
 - **`index`** — placement slot index. Default `0`.
 - **`face`** — `1` face-up / `0` face-down. Default `1`.

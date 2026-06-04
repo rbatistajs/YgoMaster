@@ -222,14 +222,16 @@ namespace YgoMasterClient
                 if (location < 0) { Console.WriteLine("[lua] debug_command: bad/missing location"); return; }
                 DuelDll.QueueDebugCommand(player, location, index, cmd);
             });
-            // cheat_card{ player_id, location, index, cid, face?, turn? }: drop a card into play mid-duel. location =
-            // a position code: 0-6 a field zone (direct, no summon rules), 13 hand / 14 extra / 15 deck, or 18 =
-            // summon-to-field. face 1 up / 0 down; turn 0 attack / 1 defense.
+            // cheat_card{ player_id, location, index, cid, face?, turn? }: drop a card into play mid-duel. location
+            // takes a name or code like the other actions (m1..m5/0-4 zones, hand/extra/deck, ...) plus "summon"
+            // (18) = summon-to-field. face 1 up / 0 down; turn 0 attack / 1 defense.
             s.Globals["cheat_card"] = (Action<DynValue>)(arg =>
             {
                 if (arg == null || arg.Type != DataType.Table) { Console.WriteLine("[lua] cheat_card: needs { player_id, location, index, cid }"); return; }
                 Table t = arg.Table;
-                DuelDll.QueueCheatCard(OptInt(t, "player_id", DuelDll.MyID), OptInt(t, "location", 0), OptInt(t, "index", 0), OptInt(t, "cid", 0), OptInt(t, "face", 1), OptInt(t, "turn", 0));
+                int location = CheatPositionCode(t.Get("location"));
+                if (location < 0) { Console.WriteLine("[lua] cheat_card: bad/missing location (a name, a code, or \"summon\")"); return; }
+                DuelDll.QueueCheatCard(OptInt(t, "player_id", DuelDll.MyID), location, OptInt(t, "index", 0), OptInt(t, "cid", 0), OptInt(t, "face", 1), OptInt(t, "turn", 0));
             });
             // run_effect(id, p1, p2, p3): raw view-event dispatch -- plays a DuelViewType cutin/animation without
             // touching the real effect (low-level escape hatch). id = a DuelViewType number OR its name as a string
@@ -467,6 +469,18 @@ namespace YgoMasterClient
         {
             if (!string.IsNullOrEmpty(name) && Enum.TryParse(name, true, out CardPos pos) && Enum.IsDefined(typeof(CardPos), pos))
                 return (int)pos;
+            return -1;
+        }
+
+        // cheat_card's "location" -> a DLL_DuelComCheatCard position: a number, a CardPos name (via LocationCode),
+        // or "summon" (18 = summon-to-field, a placement mode with no real location, hence no CardPos member).
+        // -1 if missing/unknown.
+        static int CheatPositionCode(DynValue v)
+        {
+            if (v == null) return -1;
+            if (v.Type == DataType.Number) return (int)v.Number;
+            if (v.Type == DataType.String)
+                return string.Equals(v.String, "summon", StringComparison.OrdinalIgnoreCase) ? 18 : LocationCode(v.String);
             return -1;
         }
 
