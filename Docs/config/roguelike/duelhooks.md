@@ -120,16 +120,16 @@ altered by any in-duel effect (a field-type change, a continuous buff). The **st
 
 ## Card category enums
 
-`card_props(cid)` returns the static category as **strings** (`simple_kind`, `frame`, `kind`, `icon`).
-To compare without magic strings, the matching enums are exposed as global tables whose members are the
-same string (`CardSimpleKind.Spell == "Spell"`):
+Card category/state values come back as **strings**, and the matching enums are exposed as global tables
+whose members are the same string (`CardSimpleKind.Spell == "Spell"`) so you compare without magic strings:
 
-| enum | field on `card_props` | members (examples) |
+| enum | field | members (examples) |
 |---|---|---|
-| `CardSimpleKind` | `.simple_kind` | `Normal, Effect, Ritual, Fusion, Synchro, Xyz, Link, Pendulum, Spell, Trap, Token, God` |
-| `CardFrame` | `.frame` | `Normal, Effect, Ritual, Fusion, Sync, Xyz, Link, Pend, Magic, Trap, …` |
-| `CardKind` | `.kind` | `Normal, Effect, Tuner, Toon, Spirit, Flip, Maximum, …` |
-| `CardIcon` | `.icon` | `Normal, Continuous, Equip, QuickPlay, Field, Ritual, Counter` |
+| `CardSimpleKind` | `card_props(cid).simple_kind` | `Normal, Effect, Ritual, Fusion, Synchro, Xyz, Link, Pendulum, Spell, Trap, Token, God` |
+| `CardFrame` | `card_props(cid).frame` | `Normal, Effect, Ritual, Fusion, Sync, Xyz, Link, Pend, Magic, Trap, …` |
+| `CardKind` | `card_props(cid).kind` | `Normal, Effect, Tuner, Toon, Spirit, Flip, Maximum, …` |
+| `CardIcon` | `card_props(cid).icon` | `Normal, Continuous, Equip, QuickPlay, Field, Ritual, Counter` |
+| `CardFace` | `card_state(uid).face`, `card_face(uid)` | `Up, Down` |
 
 `simple_kind` is the **archetype-agnostic kind** (one per card, derived from the frame) — the easy filter
 for "is this a Spell / a Synchro / a Normal monster". `frame`/`kind`/`icon` give finer detail.
@@ -294,7 +294,7 @@ All read functions are available from any hook.
 | `card_props(cid)` | static props `{ cid, race, attr, level, atk, def, simple_kind, frame, kind, icon }`, or `nil` |
 | `card_state(uid)` | **live** state of an instance (see below), or `nil` if the instance is gone |
 | `field_uid(player, zone)` | `uid` of the monster in `zone` (0–6) for `player`, or `nil` if empty |
-| `card_face(uid)` / `turn_counter(uid)` / `is_equip(uid)` | per-instance field reads by uid (same values as the `card_state` fields); `0`/`false` if off-field |
+| `card_face(uid)` / `turn_counter(uid)` / `is_equip(uid)` | per-instance reads by uid (same as the `card_state` fields): `card_face` → a `CardFace` name (`"Up"`/`"Down"`) or `nil`; the others `0`/`false` off-field |
 | `card_counter{ uid, type }` | count of a counter `type` on a field instance (`int`, 0 if none/off-field) |
 | `deck_top(player)` | `cid` of the top deck card, or `nil` |
 | `hand_count(player)` | cards in hand (`int`) |
@@ -335,7 +335,7 @@ end
 - `location` is the zone name for a field card (`"m1"`…`"s5"`, `"field"`), or `"hand"`/`"grave"`/`"deck"`/
   `"extra"`/`"banish"`.
 - `zone` (0–6) is present only for a monster zone.
-- On the field you also get: **`face`** (≠ 0 = face-up, 0 = face-down/set), **`turn_counter`** (turns the
+- On the field you also get: **`face`** (a `CardFace` name: `"Up"` / `"Down"`), **`turn_counter`** (turns the
   card has been on the field), **`is_equip`** (it's an equip attached to something). Each also has a direct
   form by uid: `card_face(uid)`, `turn_counter(uid)`, `is_equip(uid)`.
 - Counters are per type, so they're a separate call: **`card_counter{ uid, type }`** → that counter's value.
@@ -366,7 +366,7 @@ Special Summons one card. The table is the **source** (`player_id` = owner; `loc
 it comes from). The **destination zone is chosen by the controller** (UI prompt for you, AI for the cpu).
 Options (defaults = a plain face-up attack SS to your side):
 
-- **`face`** — `1` face-up (default), `0` face-down.
+- **`face`** — `CardFace.Up` (default) / `CardFace.Down`, or a raw `1`/`0`.
 - **`turn`** — `0` attack (default), `1` defense (the atk/def rotation).
 - **`reason`** — engine reason code (default `0`).
 - **`player_control`** — which side **controls** the summoned card (default you). Set it to the opponent
@@ -417,13 +417,13 @@ that emit only when **not** replaying, which is exactly the live mid-duel state 
 
 ```lua
 cheat_card{ player_id = 0, location = "m3", cid = 3224 }               -- face-up in your monster zone 3
-cheat_card{ player_id = 1, location = "summon", cid = 4007, face = 0 } -- summon-to-field, set face-down, opponent
+cheat_card{ player_id = 1, location = "summon", cid = 4007, face = CardFace.Down } -- summon-to-field, set face-down, opponent
 ```
 
 - **`location`** — a name or code, same as the other actions (`"m1"`–`"m5"` / `0`–`4` monster zones, `"hand"` / `"deck"` / `"extra"`, …), **plus** `"summon"` (`18`) = let the engine pick the next free zone for the card's type (monster → a monster zone, spell/trap → an S/T zone). Required.
 - **`cid`** — card id to spawn. Default `0`.
 - **`index`** — placement slot index. Default `0`.
-- **`face`** — `1` face-up / `0` face-down. Default `1`.
+- **`face`** — `CardFace.Up` / `CardFace.Down`, or a raw `1`/`0`. Default `CardFace.Up`.
 - **`turn`** — `0` attack / `1` defense. Default `0`.
 - **`player_id`** — board owner; defaults to you.
 
