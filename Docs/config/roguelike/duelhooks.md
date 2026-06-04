@@ -340,8 +340,8 @@ end
   form by uid: `card_face(uid)`, `turn_counter(uid)`, `is_equip(uid)`.
 - Counters are per type, so they're a separate call: **`card_counter{ uid, type }`** → that counter's value.
 
-`uid` identifies a specific copy (vs `cid` = the card type); it is stable while the card stays in a
-spot. Get one from an event context (`e.uid`), from `field_uid(player, zone)`, or from `c.uid` in a
+`uid` identifies a specific copy (vs `cid` = the card type) -- it's the card's instance id in the duel,
+the same in every location (field, grave, hand, ...). Get one from an event context (`e.uid`), from `field_uid(player, zone)`, or from `c.uid` in a
 `buff` query.
 
 ---
