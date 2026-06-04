@@ -449,7 +449,7 @@ namespace YgoMasterClient
             hookChainPush = new Hook<Del_ChainPush>(ChainPushDetour, DuelSig.Resolve("ChainPush"));
             hookGetSpellSpeed = new Hook<Del_GetSpellSpeed>(GetSpellSpeedDetour, DuelSig.Resolve("GetSpellSpeed"));
             hookActivateEffect = new Hook<Del_ActivateEffect>(ActivateEffectDetour, DuelSig.Resolve("ActivateEffect"));
-            hookCanActivateEffect = new Hook<Del_CanActivateEffect>(CanActivateEffectDetour, (IntPtr)(lib.ToInt64() + 0x58d230));   // RVA direct (test); sig later if it sticks
+            hookCanActivateEffect = new Hook<Del_CanActivateEffect>(CanActivateEffectDetour, DuelSig.Resolve("CanActivateEffect"));
 
             hookDLL_DuelComMovePhase = new Hook<Del_DLL_DuelComMovePhase>(DLL_DuelComMovePhase, PInvoke.GetProcAddress(lib, "DLL_DuelComMovePhase"));
             hookDLL_DuelComDoCommand = new Hook<Del_DLL_DuelComDoCommand>(DLL_DuelComDoCommand, PInvoke.GetProcAddress(lib, "DLL_DuelComDoCommand"));
