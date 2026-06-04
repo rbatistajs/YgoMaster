@@ -12,10 +12,15 @@ namespace YgoMasterClient
     {
         class Entry { public DynValue Fn; public DynValue Params; }
         static readonly Dictionary<string, List<Entry>> _hooks = new Dictionary<string, List<Entry>>();
+        // ignition{}: a custom activatable effect for field cards. condition decides, per card, if it can fire now;
+        // effect runs on activation. Stored next to the hooks and cleared with them.
+        class IgnitionDef { public DynValue Condition; public DynValue Effect; public DynValue Params; }
+        static readonly List<IgnitionDef> _ignitions = new List<IgnitionDef>();
         static DynValue _loadParams = DynValue.Nil;   // params table active during the current LoadScript
 
         public static bool HasBuff { get { List<Entry> l; return _hooks.TryGetValue("buff", out l) && l.Count > 0; } }
         public static bool HasAny { get { return _hooks.Count > 0; } }
+        public static bool HasIgnition { get { return _ignitions.Count > 0; } }
         // True if at least one callback is registered under name (cheap gate for event polling).
         public static bool Has(string name) { List<Entry> l; return _hooks.TryGetValue(name, out l) && l.Count > 0; }
 
@@ -31,7 +36,29 @@ namespace YgoMasterClient
             list.Add(new Entry { Fn = fn, Params = _loadParams });
         }
 
-        public static void Clear() { _hooks.Clear(); _loadParams = DynValue.Nil; }
+        // exposed to Lua as ignition{ condition, effect } (both required functions)
+        public static void RegisterIgnition(DynValue condition, DynValue effect)
+        {
+            if (condition == null || condition.Type != DataType.Function) return;
+            if (effect == null || effect.Type != DataType.Function) return;
+            _ignitions.Add(new IgnitionDef { Condition = condition, Effect = effect, Params = _loadParams });
+        }
+
+        // The effect of the first ignition whose condition(ctx) is truthy for this card, or null. ctx is the card
+        // context { uid, cid, player_id, player_type, zone } built by the gate/intercept.
+        public static DynValue MatchIgnition(DynValue ctx)
+        {
+            for (int i = 0; i < _ignitions.Count; i++)
+            {
+                DynValue r;
+                try { r = RoguelikeLua.Call(_ignitions[i].Condition, ctx, _ignitions[i].Params); }
+                catch (Exception ex) { Console.WriteLine("[hook] ignition cond EX: " + ex.Message); continue; }
+                if (r != null && r.CastToBool()) return _ignitions[i].Effect;
+            }
+            return null;
+        }
+
+        public static void Clear() { _hooks.Clear(); _ignitions.Clear(); _loadParams = DynValue.Nil; }
 
         static int Num(Table t, string k) { DynValue v = t.Get(k); return v != null && v.Type == DataType.Number ? (int)v.Number : 0; }
 

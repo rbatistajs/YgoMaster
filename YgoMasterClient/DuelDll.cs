@@ -195,6 +195,12 @@ namespace YgoMasterClient
         delegate ulong Del_GetSpellSpeed(IntPtr card);
         static Hook<Del_GetSpellSpeed> hookGetSpellSpeed;
 
+        // FUN_18058d230(0, player, zone, pos): the engine's "does this field monster have an activatable effect now?"
+        // -- the command-mask (FUN_180591ae0) sets the Action bit (0x8 = activate effect) iff this returns !=0. Hooked
+        // so a card matching a relic ignition{} offers "Activate Effect" in the Main Phase (RoguelikeIgnition gate).
+        delegate uint Del_CanActivateEffect(IntPtr param1, uint player, uint zone, uint pos);
+        static Hook<Del_CanActivateEffect> hookCanActivateEffect;
+
         static bool _actLogArmed;
         public static void SetActLog(bool on)
         {
@@ -239,6 +245,11 @@ namespace YgoMasterClient
             }
             catch { }
             return speed;
+        }
+        static uint CanActivateEffectDetour(IntPtr p1, uint player, uint zone, uint pos)
+        {
+            uint r = hookCanActivateEffect.Original(p1, player, zone, pos);
+            try { return RoguelikeIgnition.ForceCanActivate(player, zone, r); } catch { return r; }
         }
         // Entry-base (the [cid, state] start) per off-field pile, for the cardRef.
         static long SpecialSummonSourceBase(int location)
@@ -438,6 +449,7 @@ namespace YgoMasterClient
             hookChainPush = new Hook<Del_ChainPush>(ChainPushDetour, DuelSig.Resolve("ChainPush"));
             hookGetSpellSpeed = new Hook<Del_GetSpellSpeed>(GetSpellSpeedDetour, DuelSig.Resolve("GetSpellSpeed"));
             hookActivateEffect = new Hook<Del_ActivateEffect>(ActivateEffectDetour, DuelSig.Resolve("ActivateEffect"));
+            hookCanActivateEffect = new Hook<Del_CanActivateEffect>(CanActivateEffectDetour, (IntPtr)(lib.ToInt64() + 0x58d230));   // RVA direct (test); sig later if it sticks
 
             hookDLL_DuelComMovePhase = new Hook<Del_DLL_DuelComMovePhase>(DLL_DuelComMovePhase, PInvoke.GetProcAddress(lib, "DLL_DuelComMovePhase"));
             hookDLL_DuelComDoCommand = new Hook<Del_DLL_DuelComDoCommand>(DLL_DuelComDoCommand, PInvoke.GetProcAddress(lib, "DLL_DuelComDoCommand"));
@@ -1143,6 +1155,14 @@ namespace YgoMasterClient
         {
             if (_actLogArmed)
                 try { Console.WriteLine("[rgcmd] DoCommand player=" + player + " pos=" + position + " index=" + index + " cmd=" + commandId); } catch { }
+            // cmd 3 = activate effect. If this card carries a relic ignition, queue our effect on a real chain. We're
+            // in "wait input" here, so the queued activation won't resolve until the engine advances -- queue a no-op
+            // command (cmd 0 = Attack, invalid in Main Phase) to pump it, then skip the engine's empty effect list.
+            if (commandId == 3 && RoguelikeLua.FireIgnition(player, position))
+            {
+                lock (ActionsToRunInNextSysAct) ActionsToRunInNextSysAct.Add(() => hookDLL_DuelComDoCommand.Original(0, 0, 0, 0));
+                return;
+            }
             if (IsPvpDuel)
             {
                 Log("DLL_DuelComDoCommand player:" + player + " pos:" + position + " indx:" + index + " cmd:" + commandId + " seq:" + RunEffectSeq);

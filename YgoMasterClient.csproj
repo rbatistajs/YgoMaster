@@ -75,6 +75,7 @@
     <Compile Include="YgoMasterClient\Roguelike\Duel\RoguelikeDuelHooks.cs" />
     <Compile Include="YgoMasterClient\Roguelike\Duel\RoguelikeDuelEvents.cs" />
     <Compile Include="YgoMasterClient\Roguelike\Duel\RoguelikeChainEffect.cs" />
+    <Compile Include="YgoMasterClient\Roguelike\Duel\RoguelikeIgnition.cs" />
     <Compile Include="YgoMasterClient\Roguelike\RoguelikeStatAnim.cs" />
     <Compile Include="YgoMasterClient\Roguelike\Actions\RoguelikeActionDriver.cs" />
     <Compile Include="YgoMasterClient\Roguelike\Actions\RoguelikePackResultHook.cs" />

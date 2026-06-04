@@ -310,7 +310,19 @@ namespace YgoMasterClient
             {
                 if (arg == null || arg.Type != DataType.Table) { Console.WriteLine("[lua] chain_effect: needs { source_uid, effect = function, cost = function (optional) }"); return; }
                 Table t = arg.Table;
-                RoguelikeChainEffect.Begin(OptInt(t, "source_uid", 0), t.Get("cost"), t.Get("effect"));
+                RoguelikeChainEffect.Begin(OptInt(t, "source_uid", 0), t.Get("cost"), t.Get("effect"), DynValue.Nil);
+            });
+            // ignition{ condition = function(c), effect = function(c) }: give field cards a custom ignition effect.
+            // condition decides per card whether it can activate now (c = { uid, cid, player_id, player_type, zone });
+            // effect runs on activation, on a real chain link. Registered with the hooks (cleared each duel).
+            s.Globals["ignition"] = (Action<DynValue>)(arg =>
+            {
+                if (arg == null || arg.Type != DataType.Table) { Console.WriteLine("[lua] ignition: needs { condition = function, effect = function }"); return; }
+                Table t = arg.Table;
+                DynValue cond = t.Get("condition"), eff = t.Get("effect");
+                if (cond == null || cond.Type != DataType.Function) { Console.WriteLine("[lua] ignition: needs condition = function"); return; }
+                if (eff == null || eff.Type != DataType.Function) { Console.WriteLine("[lua] ignition: needs effect = function"); return; }
+                RoguelikeDuelHooks.RegisterIgnition(cond, eff);
             });
             // select_card{ from, filter, player, result = function(card) }: raise a card selection over the
             // candidates in `from` (a location name or a list of names) that pass `filter`, then call `result` with
@@ -664,6 +676,43 @@ namespace YgoMasterClient
                 return RoguelikeDuelHooks.EvalSpellSpeed(DynValue.NewTable(t));
             }
             catch (Exception ex) { Console.WriteLine("[lua] spell_speed EX: " + ex.Message); return 0; }
+        }
+
+        // Card context for an ignition gate/intercept: { uid, cid, player_id, player_type, zone } for the card in
+        // (player, zone), or null if the zone is empty.
+        static DynValue IgnitionCtx(int player, int zone)
+        {
+            int cid; int uid = DuelDll.FieldUid(player, zone, out cid);
+            if (uid <= 0 || cid <= 0) return null;
+            Table t = BuildActivateState(cid, player);
+            t["uid"] = uid; t["zone"] = zone;
+            return DynValue.NewTable(t);
+        }
+
+        // can-activate gate (menu + chain): true if some ignition's condition matches the card in (player, zone).
+        // Gated by HasIgnition so no Lua runs unless a relic registered an ignition.
+        public static bool CanIgnite(int player, int zone)
+        {
+            if (!RoguelikeDuelHooks.HasIgnition) return false;
+            try { DynValue c = IgnitionCtx(player, zone); return c != null && RoguelikeDuelHooks.MatchIgnition(c) != null; }
+            catch (Exception ex) { Console.WriteLine("[lua] ignition gate EX: " + ex.Message); return false; }
+        }
+
+        // DoCommand cmd-3 intercept: if the card in (player, zone) has a matching ignition, run its effect on a real
+        // chain (passing the card ctx to the effect) and return true so the caller skips the engine's empty effect
+        // list. False -> let the engine handle the command normally.
+        public static bool FireIgnition(int player, int zone)
+        {
+            if (!RoguelikeDuelHooks.HasIgnition) return false;
+            try
+            {
+                DynValue c = IgnitionCtx(player, zone);
+                if (c == null) return false;
+                DynValue eff = RoguelikeDuelHooks.MatchIgnition(c);
+                if (eff == null) return false;
+                return RoguelikeChainEffect.Begin((int)c.Table.Get("uid").Number, null, eff, c);
+            }
+            catch (Exception ex) { Console.WriteLine("[lua] ignition fire EX: " + ex.Message); return false; }
         }
 
         // Reset the shared `Duel` scratch table at duel start, so a script's state doesn't leak between duels.

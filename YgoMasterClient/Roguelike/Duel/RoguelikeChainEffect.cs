@@ -17,7 +17,7 @@ namespace YgoMasterClient
     // engine's "this card is here with that effId" activation check).
     static class RoguelikeChainEffect
     {
-        class Pending { public int EffId; public DynValue Cost; public DynValue Effect; public bool CostFired; }
+        class Pending { public int EffId; public DynValue Cost; public DynValue Effect; public DynValue Ctx; public bool CostFired; }
         static readonly List<Pending> _pending = new List<Pending>();
 
         // Cheap gate for the per-view poll in DuelDll.RunEffect (skip unless something is pending).
@@ -25,7 +25,7 @@ namespace YgoMasterClient
 
         // Begin a blank-chain custom effect anchored on the field card at sourceUid. cost is optional. Queues the
         // activation now; cost fires at the cost phase, effect at resolution. Returns false on bad args/source.
-        public static bool Begin(int sourceUid, DynValue cost, DynValue effect)
+        public static bool Begin(int sourceUid, DynValue cost, DynValue effect, DynValue ctx)
         {
             if (effect == null || effect.Type != DataType.Function) { Console.WriteLine("[chain_effect] needs an effect function"); return false; }
             if (cost != null && cost.Type != DataType.Function) cost = null;   // cost is optional
@@ -38,7 +38,7 @@ namespace YgoMasterClient
                 if (location >= 7) { Console.WriteLine("[chain_effect] source must be a field monster (zone 0-6), got location " + location); return false; }
                 int cid = (ushort)Marshal.ReadInt16(buf, 0);
                 if (cid == 0) { Console.WriteLine("[chain_effect] source has no cid"); return false; }
-                _pending.Add(new Pending { EffId = cid, Cost = cost, Effect = effect });
+                _pending.Add(new Pending { EffId = cid, Cost = cost, Effect = effect, Ctx = ctx });
                 DuelDll.QueueActivateEffect(player, 3, location, cid, (uint)sourceUid, 0, 0);   // category 3 = monster, blank effId = the source's own cid
                 return true;
             }
@@ -54,7 +54,7 @@ namespace YgoMasterClient
                 if (p.EffId == effId && !p.CostFired)
                 {
                     p.CostFired = true;
-                    if (p.Cost != null) RoguelikeLua.Call(p.Cost, DynValue.Nil, DynValue.Nil);
+                    if (p.Cost != null) RoguelikeLua.Call(p.Cost, p.Ctx, DynValue.Nil);
                     return;
                 }
             }
@@ -68,8 +68,9 @@ namespace YgoMasterClient
                 if (_pending[i].EffId == effId)
                 {
                     DynValue fn = _pending[i].Effect;
+                    DynValue ctx = _pending[i].Ctx;
                     _pending.RemoveAt(i);
-                    RoguelikeLua.Call(fn, DynValue.Nil, DynValue.Nil);
+                    RoguelikeLua.Call(fn, ctx, DynValue.Nil);
                     return;
                 }
             }
